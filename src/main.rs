@@ -130,8 +130,12 @@ struct PlayArgs {
     target: String,
 
     /// Floating window size as WIDTHxHEIGHT
-    #[arg(long, default_value = "1600x200")]
+    #[arg(long, default_value = "1200x200")]
     geometry: String,
+
+    /// Initial volume in percent (default: mpv's own setting)
+    #[arg(long)]
+    volume: Option<u32>,
 
     /// Extra argument for mpv, e.g. --mpv-arg=--volume=70 (repeatable)
     #[arg(long = "mpv-arg", allow_hyphen_values = true)]
@@ -207,6 +211,7 @@ fn main() -> Result<()> {
             font_en: &cli.font_en,
             font_zh: &cli.font_zh,
             mpv_args: &p.mpv_args,
+            volume: p.volume,
             dry_run: p.dry_run,
         });
     }

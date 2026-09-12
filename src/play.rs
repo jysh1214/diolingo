@@ -19,8 +19,18 @@ pub struct PlayOpts<'a> {
     pub font_en: &'a str,
     pub font_zh: &'a str,
     pub mpv_args: &'a [String],
+    /// Initial volume in percent; `None` leaves mpv's own default.
+    pub volume: Option<u32>,
     pub dry_run: bool,
 }
+
+/// Bindings added on top of mpv's defaults: the mouse wheel over the bar
+/// changes the volume instead of seeking (keys 9 / 0 and m still work).
+const INPUT_CONF: &str = "\
+# written by diolingo play; mpv's built-in bindings stay active
+WHEEL_UP    add volume 5
+WHEEL_DOWN  add volume -5
+";
 
 pub fn run(opts: &PlayOpts) -> Result<()> {
     let dir = resolve_dir(opts.base, opts.target)?;
@@ -34,6 +44,7 @@ pub fn run(opts: &PlayOpts) -> Result<()> {
     let (w, h) = opts.geometry;
     let ass = dir.join(".player.ass");
     subs::write_ass(&ass, &cues, opts.order, &AssStyle::player(opts.font_en, opts.font_zh, w, h))?;
+    let input_conf = write_input_conf(opts.base)?;
 
     let mut cmd = Command::new("mpv");
     cmd.arg("--title=diolingo")
@@ -44,8 +55,11 @@ pub fn run(opts: &PlayOpts) -> Result<()> {
         .args(["--ontop", "--border=no", "--keep-open=yes", "--vid=no", "--audio-display=no"])
         .args(["--sub-ass-override=no", "--sub-ass-force-margins=yes", "--sub-use-margins=yes"])
         .arg(format!("--sub-file={}", ass.display()))
-        .args(opts.mpv_args)
-        .arg(&audio);
+        .arg(format!("--input-conf={}", input_conf.display()));
+    if let Some(v) = opts.volume {
+        cmd.arg(format!("--volume={v}"));
+    }
+    cmd.args(opts.mpv_args).arg(&audio);
 
     if opts.dry_run {
         println!("{}", shell_words(&cmd));
@@ -75,6 +89,25 @@ fn resolve_dir(base: &Path, id: &str) -> Result<PathBuf> {
 
 fn is_video_id(s: &str) -> bool {
     s.len() == 11 && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// `<base>/.mpv-input.conf`: the user's own `~/.config/mpv/input.conf` (if
+/// any, so `--input-conf` does not hide it) followed by the diolingo bindings.
+fn write_input_conf(base: &Path) -> Result<PathBuf> {
+    let user_conf = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
+        .map(|c| c.join("mpv").join("input.conf"));
+    let mut content = String::new();
+    if let Some(user) = user_conf.filter(|p| p.is_file()) {
+        content.push_str(&fs::read_to_string(&user).with_context(|| format!("reading {}", user.display()))?);
+        content.push('\n');
+    }
+    content.push_str(INPUT_CONF);
+    fs::create_dir_all(base)?;
+    let path = base.join(".mpv-input.conf");
+    fs::write(&path, content).with_context(|| format!("writing {}", path.display()))?;
+    Ok(path)
 }
 
 fn find_file(dir: &Path, suffix: &str) -> Option<PathBuf> {

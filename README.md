@@ -127,13 +127,17 @@ folder under `~/.diolingo/` (or `--out DIR`), writes
 a subtitle file sized for the window (`.player.ass`, rebuilt each time from
 the `.en.srt` / `.zh.srt` sidecars), and starts `mpv` on the `.m4a` with a
 borderless, always-on-top window that shows only the bilingual subtitles.
-`--geometry WxH` sets the window size (default `1600x200`), `--order zh-en`
-and `--font-*` apply as for the video, `--mpv-arg=...` forwards options to
-mpv, and `--dry-run` prints the command instead of running it.
+`--geometry WxH` sets the window size (default `1200x200`; lines that do not
+fit wrap onto a second line), `--volume N` sets the starting volume,
+`--order zh-en` and `--font-*` apply as for the video, `--mpv-arg=...`
+forwards options to mpv, and `--dry-run` prints the command instead of
+running it.
 
-mpv's default keys are handy for study: `Ctrl+←`/`Ctrl+→` jump to the previous
-or next subtitle line, `l` sets an A-B loop, `[` / `]` change speed, `v`
-toggles subtitles, `q` quits.
+Volume: scroll the mouse wheel over the bar (±5 per notch; diolingo adds this
+binding on top of mpv's defaults, your own `~/.config/mpv/input.conf` is kept),
+or use mpv's keys `9` / `0` and `m` for mute. Other default keys handy for
+study: `Ctrl+←`/`Ctrl+→` jump to the previous or next subtitle line, `l` sets
+an A-B loop, `[` / `]` change speed, `v` toggles subtitles, `q` quits.
 
 On niri, a window rule makes the bar float at the bottom of the screen
 (add it to `~/.config/niri/config.kdl`; mpv sets `title=diolingo` so the rule
