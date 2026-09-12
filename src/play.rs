@@ -15,6 +15,8 @@ pub struct PlayOpts<'a> {
     /// YouTube video id.
     pub target: &'a str,
     pub geometry: (u32, u32),
+    /// English font size in pixels.
+    pub font_size: u32,
     pub order: Order,
     pub font_en: &'a str,
     pub font_zh: &'a str,
@@ -43,7 +45,7 @@ pub fn run(opts: &PlayOpts) -> Result<()> {
     let cues = load_bilingual(&en_srt, &zh_srt)?;
     let (w, h) = opts.geometry;
     let ass = dir.join(".player.ass");
-    subs::write_ass(&ass, &cues, opts.order, &AssStyle::player(opts.font_en, opts.font_zh, w, h))?;
+    subs::write_ass(&ass, &cues, opts.order, &AssStyle::player(opts.font_en, opts.font_zh, w, h, opts.font_size))?;
     let input_conf = write_input_conf(opts.base)?;
 
     let mut cmd = Command::new("mpv");

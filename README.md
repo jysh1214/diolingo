@@ -127,8 +127,10 @@ folder under `~/.diolingo/` (or `--out DIR`), writes
 a subtitle file sized for the window (`.player.ass`, rebuilt each time from
 the `.en.srt` / `.zh.srt` sidecars), and starts `mpv` on the `.m4a` with a
 borderless, always-on-top window that shows only the bilingual subtitles.
-`--geometry WxH` sets the window size (default `1200x200`; lines that do not
-fit wrap onto a second line), `--volume N` sets the starting volume,
+`--geometry WxH` sets the window size (default `1600x110`, a bar just tall
+enough for the two lines), `--font-size N` the English size in pixels
+(default 40, Chinese 90% of it; raise the height too if you enlarge it),
+`--volume N` sets the starting volume,
 `--order zh-en` and `--font-*` apply as for the video, `--mpv-arg=...`
 forwards options to mpv, and `--dry-run` prints the command instead of
 running it.

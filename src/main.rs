@@ -129,9 +129,13 @@ struct PlayArgs {
     /// YouTube video id (the part in [brackets] of the folder name)
     target: String,
 
-    /// Floating window size as WIDTHxHEIGHT
-    #[arg(long, default_value = "1200x200")]
+    /// Floating window size as WIDTHxHEIGHT (just tall enough for the two lines at the default font size)
+    #[arg(long, default_value = "1600x110")]
     geometry: String,
+
+    /// English font size in pixels (Chinese is 90% of it)
+    #[arg(long, default_value_t = 40)]
+    font_size: u32,
 
     /// Initial volume in percent (default: mpv's own setting)
     #[arg(long)]
@@ -207,6 +211,7 @@ fn main() -> Result<()> {
             base: &layout.out_base.join(".diolingo"),
             target: &p.target,
             geometry: (w, h),
+            font_size: p.font_size,
             order: cli.order,
             font_en: &cli.font_en,
             font_zh: &cli.font_zh,

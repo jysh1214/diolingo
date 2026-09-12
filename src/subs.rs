@@ -32,17 +32,17 @@ impl<'a> AssStyle<'a> {
     }
 
     /// Style for a subtitle-only window of `width`x`height` pixels: the canvas
-    /// equals the window, so the sizes are absolute pixels.
-    pub fn player(font_en: &'a str, font_zh: &'a str, width: u32, height: u32) -> Self {
-        let h = height as f32;
+    /// equals the window, so `size_en` is an absolute pixel size (Chinese gets
+    /// 90% of it) and the two lines sit at the bottom with a small margin.
+    pub fn player(font_en: &'a str, font_zh: &'a str, width: u32, height: u32, size_en: u32) -> Self {
         Self {
             font_en,
             font_zh,
             play_res: (width, height),
-            size_en: (h * 0.20).round() as u32,
-            size_zh: (h * 0.18).round() as u32,
+            size_en,
+            size_zh: (size_en as f32 * 0.9).round() as u32,
             margin_h: 20,
-            margin_v: (h * 0.06).round() as u32,
+            margin_v: 6,
         }
     }
 }
