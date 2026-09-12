@@ -126,6 +126,8 @@ enum Command {
     Play(PlayArgs),
     /// Send an mpv command to the running player, e.g. `ctl sub-seek -1`, `ctl cycle pause`, `ctl add volume 5`
     Ctl(CtlArgs),
+    /// List the downloaded videos that `play` can use
+    List,
 }
 
 #[derive(Args, Debug)]
@@ -224,6 +226,7 @@ fn main() -> Result<()> {
     };
 
     match &cli.command {
+        Some(Command::List) => return play::list(&layout.out_base.join(".diolingo")),
         Some(Command::Ctl(c)) => return play::ctl(&c.words),
         Some(Command::Play(p)) => {
             return play::run(&play::PlayOpts {

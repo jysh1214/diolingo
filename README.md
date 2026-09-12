@@ -121,8 +121,12 @@ diolingo --en-lang en-orig URL
 ## Listening with an always-on-top subtitle overlay
 
 ```sh
+diolingo list       # downloaded videos: id, length, title (newest first)
 diolingo play ID
 ```
+
+`list` looks under `~/.diolingo/` (or `--out DIR`) and flags folders that
+`play` cannot use yet (no audio or no subtitles).
 
 `play` takes the video id (the bracketed part of the folder name), finds the
 folder under `~/.diolingo/` (or `--out DIR`), starts `mpv` headless on the

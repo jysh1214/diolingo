@@ -111,6 +111,67 @@ pub fn run(opts: &PlayOpts) -> Result<()> {
     result
 }
 
+/// `diolingo list`: every `[<id>] <title>` folder under `base`, newest first,
+/// with the audio length and a note when something needed by `play` is missing.
+pub fn list(base: &Path) -> Result<()> {
+    let mut rows: Vec<(std::time::SystemTime, String, String)> = Vec::new();
+    let entries = match fs::read_dir(base) {
+        Ok(e) => e,
+        Err(_) => {
+            println!("no videos yet ({} does not exist)", base.display());
+            return Ok(());
+        }
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some((id, title)) = parse_folder_name(&name) else { continue };
+        if !path.is_dir() {
+            continue;
+        }
+        let modified = entry.metadata().and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH);
+        let has_audio = find_file(&path, ".m4a").is_some() || find_file(&path, ".mkv").is_some();
+        let en = find_file(&path, ".en.srt");
+        let has_zh = find_file(&path, ".zh.srt").is_some();
+        let length = en
+            .as_ref()
+            .and_then(|p| fs::read_to_string(p).ok())
+            .and_then(|t| captions::parse_srt(&t).ok())
+            .and_then(|cues| cues.last().map(|c| c.end_ms))
+            .map(format_length)
+            .unwrap_or_else(|| "--:--".to_string());
+        let note = match (has_audio, en.is_some() && has_zh) {
+            (true, true) => String::new(),
+            (false, true) => "  (no audio: run diolingo on it again)".to_string(),
+            (true, false) => "  (no subtitles)".to_string(),
+            (false, false) => "  (incomplete)".to_string(),
+        };
+        rows.push((modified, id.to_string(), format!("{length:>6}  {title}{note}")));
+    }
+    if rows.is_empty() {
+        println!("no videos yet under {}", base.display());
+        return Ok(());
+    }
+    rows.sort_by_key(|r| std::cmp::Reverse(r.0));
+    for (_, id, rest) in rows {
+        println!("{id}  {rest}");
+    }
+    Ok(())
+}
+
+/// Split `[<id>] <title>` into its parts.
+fn parse_folder_name(name: &str) -> Option<(&str, &str)> {
+    let rest = name.strip_prefix('[')?;
+    let (id, title) = rest.split_once(']')?;
+    is_video_id(id).then(|| (id, title.trim()))
+}
+
+fn format_length(ms: u64) -> String {
+    let secs = ms.div_ceil(1000);
+    let (h, m, s) = (secs / 3600, (secs / 60) % 60, secs % 60);
+    if h > 0 { format!("{h}:{m:02}:{s:02}") } else { format!("{m:02}:{s:02}") }
+}
+
 /// `diolingo ctl <mpv command...>`: forward one command to the running player.
 pub fn ctl(words: &[String]) -> Result<()> {
     let mut client = mpv::Client::connect(&mpv::socket_path())?;
@@ -222,6 +283,16 @@ fn shell_words(cmd: &Command) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn folder_names_and_lengths() {
+        assert_eq!(parse_folder_name("[5C_HPTJg5ek] Rust in 100 Seconds"), Some(("5C_HPTJg5ek", "Rust in 100 Seconds")));
+        assert_eq!(parse_folder_name("[5C_HPTJg5ek]"), Some(("5C_HPTJg5ek", "")));
+        assert_eq!(parse_folder_name("notes"), None);
+        assert_eq!(parse_folder_name("[short] x"), None);
+        assert_eq!(format_length(148_631), "02:29");
+        assert_eq!(format_length(3_723_000), "1:02:03");
+    }
 
     #[test]
     fn resolves_by_id_only() {
