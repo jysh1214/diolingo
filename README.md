@@ -42,6 +42,7 @@ need to stay around after installing.
 - `yt-dlp` on PATH (`uv tool install yt-dlp`) plus a JS runtime it can use
   (`deno` on PATH; yt-dlp warns and may miss formats without one).
 - `ffmpeg` built with libass (renders the hard-subbed copy).
+- `mpv` for `diolingo play` (optional; `sudo pacman -S mpv` on Arch).
 - An NVIDIA GPU. Qwen3-8B in bf16 needs about 17 GB of VRAM; see the model
   table below for smaller or quantised options.
 - Fonts for the styled track: defaults are `Noto Sans` and `Noto Sans CJK TC`
@@ -113,6 +114,38 @@ diolingo --model Qwen/Qwen3-4B --qwen-arg=--batch-prompts --qwen-arg=4 URL
 # see which caption tracks exist, then force the English source
 diolingo --list-subs URL
 diolingo --en-lang en-orig URL
+```
+
+## Listening with a floating subtitle bar
+
+```sh
+diolingo play 5C_HPTJg5ek          # by video id
+diolingo play "100 seconds"        # by part of the title
+diolingo play https://youtu.be/... # by URL
+```
+
+`play` finds the video's folder under `~/.diolingo/` (or `--out DIR`), writes
+a subtitle file sized for the window (`.player.ass`, rebuilt each time from
+the `.en.srt` / `.zh.srt` sidecars), and starts `mpv` on the `.m4a` with a
+borderless, always-on-top window that shows only the bilingual subtitles.
+`--geometry WxH` sets the window size (default `1600x200`), `--order zh-en`
+and `--font-*` apply as for the video, `--mpv-arg=...` forwards options to
+mpv, and `--dry-run` prints the command instead of running it.
+
+mpv's default keys are handy for study: `Ctrl+←`/`Ctrl+→` jump to the previous
+or next subtitle line, `l` sets an A-B loop, `[` / `]` change speed, `v`
+toggles subtitles, `q` quits.
+
+On niri, a window rule makes the bar float at the bottom of the screen
+(add it to `~/.config/niri/config.kdl`; mpv sets `title=diolingo` so the rule
+only matches this window):
+
+```kdl
+window-rule {
+    match app-id="mpv" title="diolingo"
+    open-floating true
+    default-floating-position x=0 y=40 relative-to="bottom"
+}
 ```
 
 ## Other options

@@ -57,9 +57,18 @@ pub fn parse_json3(text: &str) -> Result<Vec<Cue>> {
     Ok(normalize(cues))
 }
 
-/// Parse WebVTT or SRT. Handles YouTube's rolling auto-caption VTT, where each
-/// cue repeats the previous line, by dropping already-emitted leading lines.
+/// Parse WebVTT. Handles YouTube's rolling auto-caption VTT, where each cue
+/// repeats the previous line, by dropping already-emitted leading lines.
 pub fn parse_vtt(text: &str) -> Result<Vec<Cue>> {
+    parse_blocks(text, true)
+}
+
+/// Parse plain SRT (no rolling-line dedupe, so repeated cues survive).
+pub fn parse_srt(text: &str) -> Result<Vec<Cue>> {
+    parse_blocks(text, false)
+}
+
+fn parse_blocks(text: &str, dedupe_rolling: bool) -> Result<Vec<Cue>> {
     let text = text.trim_start_matches('\u{feff}').replace("\r\n", "\n");
     let mut cues = Vec::new();
     let mut prev_last_line: Option<String> = None;
@@ -85,7 +94,8 @@ pub fn parse_vtt(text: &str) -> Result<Vec<Cue>> {
             continue;
         }
         let mut lines: Vec<&str> = cleaned.split('\n').collect();
-        if let Some(prev) = &prev_last_line
+        if dedupe_rolling
+            && let Some(prev) = &prev_last_line
             && lines.first() == Some(&prev.as_str())
         {
             lines.remove(0);
@@ -103,7 +113,8 @@ pub fn parse_vtt(text: &str) -> Result<Vec<Cue>> {
 pub fn parse(ext: &str, text: &str) -> Result<Vec<Cue>> {
     match ext {
         "json3" => parse_json3(text),
-        "vtt" | "srt" => parse_vtt(text),
+        "vtt" => parse_vtt(text),
+        "srt" => parse_srt(text),
         other => bail!("unsupported caption format {other:?}"),
     }
 }

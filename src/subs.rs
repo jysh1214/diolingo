@@ -17,6 +17,34 @@ pub enum Order {
 pub struct AssStyle<'a> {
     pub font_en: &'a str,
     pub font_zh: &'a str,
+    /// Canvas the sizes below refer to (`PlayResX`/`PlayResY`).
+    pub play_res: (u32, u32),
+    pub size_en: u32,
+    pub size_zh: u32,
+    pub margin_h: u32,
+    pub margin_v: u32,
+}
+
+impl<'a> AssStyle<'a> {
+    /// Style for a full video frame (1080p canvas; libass scales it to the real size).
+    pub fn video(font_en: &'a str, font_zh: &'a str) -> Self {
+        Self { font_en, font_zh, play_res: (1920, 1080), size_en: 54, size_zh: 48, margin_h: 80, margin_v: 42 }
+    }
+
+    /// Style for a subtitle-only window of `width`x`height` pixels: the canvas
+    /// equals the window, so the sizes are absolute pixels.
+    pub fn player(font_en: &'a str, font_zh: &'a str, width: u32, height: u32) -> Self {
+        let h = height as f32;
+        Self {
+            font_en,
+            font_zh,
+            play_res: (width, height),
+            size_en: (h * 0.20).round() as u32,
+            size_zh: (h * 0.18).round() as u32,
+            margin_h: 20,
+            margin_v: (h * 0.06).round() as u32,
+        }
+    }
 }
 
 pub fn srt_time(ms: u64) -> String {
@@ -76,10 +104,11 @@ fn ass_escape(text: &str) -> String {
 /// the second line of each cue switches style with `{\rZH}` / `{\rEN}`.
 pub fn write_ass(path: &Path, cues: &[BiCue], order: Order, style: &AssStyle) -> Result<()> {
     let mut out = String::new();
-    out.push_str("[Script Info]\nScriptType: v4.00+\nPlayResX: 1920\nPlayResY: 1080\nWrapStyle: 0\nScaledBorderAndShadow: yes\nYCbCr Matrix: None\n\n");
+    let _ = write!(out, "[Script Info]\nScriptType: v4.00+\nPlayResX: {}\nPlayResY: {}\nWrapStyle: 0\nScaledBorderAndShadow: yes\nYCbCr Matrix: None\n\n", style.play_res.0, style.play_res.1);
     out.push_str("[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n");
-    let _ = writeln!(out, "Style: EN,{},54,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,2.5,1,2,80,80,42,1", style.font_en);
-    let _ = writeln!(out, "Style: ZH,{},48,&H0096E6FF,&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,2.5,1,2,80,80,42,1", style.font_zh);
+    let (mh, mv) = (style.margin_h, style.margin_v);
+    let _ = writeln!(out, "Style: EN,{},{},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,2.5,1,2,{mh},{mh},{mv},1", style.font_en, style.size_en);
+    let _ = writeln!(out, "Style: ZH,{},{},&H0096E6FF,&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,2.5,1,2,{mh},{mh},{mv},1", style.font_zh, style.size_zh);
     out.push_str("\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n");
     for c in cues {
         let en = ass_escape(&c.en);

@@ -3,12 +3,13 @@
 mod align;
 mod captions;
 mod ffmpeg;
+mod play;
 mod qwen;
 mod subs;
 mod ytdlp;
 
 use anyhow::{Context, Result, anyhow, bail};
-use clap::Parser;
+use clap::{Args, Parser, Subcommand};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -19,14 +20,17 @@ use qwen::Qwen;
 use ytdlp::{Info, Track, YtDlp, ZhScript};
 
 #[derive(Parser, Debug)]
-#[command(name = "diolingo", version, about = "Download a YouTube video and add bilingual EN/ZH subtitles")]
+#[command(name = "diolingo", version, about = "Download a YouTube video and add bilingual EN/ZH subtitles", subcommand_negates_reqs = true)]
 struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+
     /// YouTube video or playlist URLs
     #[arg(required = true)]
     urls: Vec<String>,
 
     /// Base directory: each video's files go to "<OUT>/.diolingo/[<video id>] <title>/" [default: $HOME]
-    #[arg(short, long)]
+    #[arg(short, long, global = true)]
     out: Option<PathBuf>,
 
     /// Work directory for downloads and intermediate files [default: "<OUT>/.diolingo/[<video id>] <title>/.work"]
@@ -62,15 +66,15 @@ struct Cli {
     en_lang: Option<String>,
 
     /// Line order inside each bilingual cue
-    #[arg(long, value_enum, default_value_t = Order::EnZh)]
+    #[arg(long, value_enum, default_value_t = Order::EnZh, global = true)]
     order: Order,
 
     /// Font for the English line in the styled (ASS) subtitles
-    #[arg(long, default_value = "Noto Sans")]
+    #[arg(long, default_value = "Noto Sans", global = true)]
     font_en: String,
 
     /// Font for the Chinese line in the styled (ASS) subtitles
-    #[arg(long, default_value = "Noto Sans CJK TC")]
+    #[arg(long, default_value = "Noto Sans CJK TC", global = true)]
     font_zh: String,
 
     /// Maximum video height to download
@@ -114,6 +118,30 @@ struct Cli {
     clean: bool,
 }
 
+#[derive(Subcommand, Debug)]
+enum Command {
+    /// Play a downloaded video's audio with a floating window showing the bilingual subtitles (needs mpv)
+    Play(PlayArgs),
+}
+
+#[derive(Args, Debug)]
+struct PlayArgs {
+    /// Video id, YouTube URL, part of the title, or the folder path
+    target: String,
+
+    /// Floating window size as WIDTHxHEIGHT
+    #[arg(long, default_value = "1600x200")]
+    geometry: String,
+
+    /// Extra argument for mpv, e.g. --mpv-arg=--volume=70 (repeatable)
+    #[arg(long = "mpv-arg", allow_hyphen_values = true)]
+    mpv_args: Vec<String>,
+
+    /// Print the mpv command instead of running it
+    #[arg(long)]
+    dry_run: bool,
+}
+
 /// Where a video's files live. All paths are absolute so ffmpeg can run from
 /// the work directory without relative outputs ending up in the wrong place.
 struct Layout {
@@ -155,6 +183,34 @@ fn log(msg: impl AsRef<str>) {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|h| !h.as_os_str().is_empty())
+        .context("HOME is not set")?;
+    let layout = Layout {
+        out_base: std::path::absolute(cli.out.clone().unwrap_or_else(|| home.clone())).context("resolving --out")?,
+        work_base: cli.work.as_ref().map(std::path::absolute).transpose().context("resolving --work")?,
+    };
+
+    if let Some(Command::Play(p)) = &cli.command {
+        let (w, h) = p
+            .geometry
+            .split_once('x')
+            .and_then(|(w, h)| Some((w.parse::<u32>().ok()?, h.parse::<u32>().ok()?)))
+            .filter(|&(w, h)| w > 0 && h > 0)
+            .with_context(|| format!("--geometry must be WIDTHxHEIGHT, got {:?}", p.geometry))?;
+        return play::run(&play::PlayOpts {
+            base: &layout.out_base.join(".diolingo"),
+            target: &p.target,
+            geometry: (w, h),
+            order: cli.order,
+            font_en: &cli.font_en,
+            font_zh: &cli.font_zh,
+            mpv_args: &p.mpv_args,
+            dry_run: p.dry_run,
+        });
+    }
+
     let mut common_args = Vec::new();
     if let Some(b) = &cli.cookies_from_browser {
         common_args.extend(["--cookies-from-browser".to_string(), b.clone()]);
@@ -170,14 +226,6 @@ fn main() -> Result<()> {
     }
     log(format!("yt-dlp {version}"));
 
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .filter(|h| !h.as_os_str().is_empty())
-        .context("HOME is not set")?;
-    let layout = Layout {
-        out_base: std::path::absolute(cli.out.clone().unwrap_or_else(|| home.clone())).context("resolving --out")?,
-        work_base: cli.work.as_ref().map(std::path::absolute).transpose().context("resolving --work")?,
-    };
     let script = match &cli.script {
         Some(s) => std::path::absolute(s).context("resolving --script")?,
         None => qwen::install_script(&home.join(".diolingo").join(".scripts"))?,
@@ -285,7 +333,7 @@ fn process_video(cli: &Cli, layout: &Layout, yt: &YtDlp, agent: &ureq::Agent, tr
     let w = |suffix: &str| work.join(format!("{id}.{suffix}"));
     let (bi_srt, bi_ass, en_srt, zh_srt) = (w("bi.srt"), w("bi.ass"), w("en.srt"), w(&format!("{}.srt", cli.zh.tag())));
     subs::write_bilingual_srt(&bi_srt, &bi, cli.order)?;
-    subs::write_ass(&bi_ass, &bi, cli.order, &AssStyle { font_en: &cli.font_en, font_zh: &cli.font_zh })?;
+    subs::write_ass(&bi_ass, &bi, cli.order, &AssStyle::video(&cli.font_en, &cli.font_zh))?;
     subs::write_srt(&en_srt, &en_cues)?;
     subs::write_zh_srt(&zh_srt, &bi)?;
 
