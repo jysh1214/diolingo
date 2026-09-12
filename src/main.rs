@@ -85,6 +85,10 @@ struct Cli {
     #[arg(long = "no-burn", action = clap::ArgAction::SetFalse)]
     burn: bool,
 
+    /// Skip the audio-only file (<Title> [id].m4a)
+    #[arg(long = "no-audio", action = clap::ArgAction::SetFalse)]
+    audio: bool,
+
     /// Print the available caption tracks and exit
     #[arg(long)]
     list_subs: bool,
@@ -309,6 +313,11 @@ fn process_video(cli: &Cli, layout: &Layout, yt: &YtDlp, agent: &ureq::Agent, tr
         log("muxing subtitle tracks into MKV");
         ffmpeg::mux(&video, &tracks, &mkv)?;
         log(format!("video: {}", mkv.display()));
+        if cli.audio {
+            let m4a = out("m4a");
+            ffmpeg::extract_audio(&video, &m4a)?;
+            log(format!("audio: {}", m4a.display()));
+        }
         if cli.burn {
             let hard = out("hardsub.mkv");
             log("burning styled subtitles into the picture (libx264 re-encode)");

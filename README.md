@@ -14,6 +14,7 @@ produces, in `~/.diolingo/[<video id>] <title>/`:
 |------|---------|
 | `<Title> [id].mkv` | video + 4 subtitle tracks: styled EN+ZH (default), plain EN+ZH, EN only, ZH only |
 | `<Title> [id].hardsub.mkv` | the same video with the styled EN+ZH subtitles burned into the picture (`--no-burn` skips it) |
+| `<Title> [id].m4a` | audio only, for listening practice (`--no-audio` skips it) |
 | `<Title> [id].srt` | bilingual SRT (English line, then Chinese line) |
 | `<Title> [id].ass` | bilingual ASS with separate `EN` / `ZH` styles (white / pale yellow) |
 | `<Title> [id].en.srt`, `.zh.srt` | single-language sidecars |
@@ -122,6 +123,8 @@ diolingo --en-lang en-orig URL
 - `--no-video`: only write the subtitle files.
 - `--no-burn`: skip the hard-subbed copy and only produce the MKV with
   switchable subtitle tracks.
+- `--no-audio`: skip the audio-only `.m4a` (stream-copied when YouTube's track
+  is AAC, otherwise transcoded to AAC).
 - `--order zh-en`: Chinese line on top.
 - `--max-height 2160`: download resolution cap (default 1080).
 - `--cookies-from-browser firefox` / `--cookies FILE`: use your logged-in

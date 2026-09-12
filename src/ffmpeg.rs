@@ -44,6 +44,33 @@ pub fn mux(video: &Path, subs: &[SubTrack], out: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Write the first audio stream to an `.m4a`: stream-copied when it is already
+/// AAC (YouTube's usual m4a track), otherwise transcoded to AAC.
+pub fn extract_audio(video: &Path, out: &Path) -> Result<()> {
+    let probe = Command::new("ffprobe")
+        .args(["-v", "error", "-select_streams", "a:0", "-show_entries", "stream=codec_name", "-of", "csv=p=0"])
+        .arg(video)
+        .output()
+        .context("running ffprobe")?;
+    let codec = String::from_utf8_lossy(&probe.stdout).trim().to_string();
+    if codec.is_empty() {
+        bail!("no audio stream in {}", video.display());
+    }
+    let mut cmd = Command::new("ffmpeg");
+    cmd.args(["-y", "-hide_banner", "-loglevel", "error", "-i"]).arg(video).args(["-map", "0:a:0", "-vn"]);
+    if codec == "aac" {
+        cmd.args(["-c:a", "copy"]);
+    } else {
+        cmd.args(["-c:a", "aac", "-b:a", "192k"]);
+    }
+    cmd.args(["-movflags", "+faststart"]).arg(out);
+    let status = cmd.status().context("running ffmpeg")?;
+    if !status.success() {
+        bail!("ffmpeg audio extraction failed ({status})");
+    }
+    Ok(())
+}
+
 /// Re-encode the video with the ASS file rendered into the picture.
 /// `ass_name` must be a plain file name inside `work_dir` (no path escaping needed).
 pub fn burn(work_dir: &Path, video: &Path, ass_name: &str, out: &Path) -> Result<()> {
