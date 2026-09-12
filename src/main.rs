@@ -137,9 +137,17 @@ struct PlayArgs {
     #[arg(long, default_value_t = 1600)]
     width: i32,
 
-    /// Gap between the bar and the bottom screen edge, in pixels
-    #[arg(long, default_value_t = 40)]
-    bottom: i32,
+    /// Gap between the bar and the bottom screen edge, in pixels [default: last dragged position, else 40]
+    #[arg(long)]
+    bottom: Option<i32>,
+
+    /// Distance from the left screen edge, in pixels [default: last dragged position, else centred]
+    #[arg(long)]
+    left: Option<i32>,
+
+    /// Forget the dragged position and start from the defaults
+    #[arg(long)]
+    reset_position: bool,
 
     /// English font size in pixels (Chinese is 90% of it)
     #[arg(long, default_value_t = 40)]
@@ -222,7 +230,9 @@ fn main() -> Result<()> {
                 base: &layout.out_base.join(".diolingo"),
                 target: &p.target,
                 width: p.width.max(200),
-                bottom_margin: p.bottom.max(0),
+                left: p.left.map(|v| v.max(0)),
+                bottom: p.bottom.map(|v| v.max(0)),
+                reset_position: p.reset_position,
                 font_size: p.font_size.max(8),
                 order: cli.order,
                 font_en: &cli.font_en,

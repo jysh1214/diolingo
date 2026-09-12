@@ -4,7 +4,7 @@
 use crate::align::BiCue;
 use crate::captions;
 use crate::mpv;
-use crate::overlay::{self, OverlayOpts};
+use crate::overlay::{self, OverlayOpts, Position};
 use crate::subs::Order;
 use anyhow::{Context, Result, bail};
 use serde_json::json;
@@ -21,7 +21,10 @@ pub struct PlayOpts<'a> {
     /// YouTube video id.
     pub target: &'a str,
     pub width: i32,
-    pub bottom_margin: i32,
+    /// Explicit `--left` / `--bottom`; otherwise the saved position, then the default.
+    pub left: Option<i32>,
+    pub bottom: Option<i32>,
+    pub reset_position: bool,
     pub font_size: i32,
     pub order: Order,
     pub font_en: &'a str,
@@ -65,12 +68,24 @@ pub fn run(opts: &PlayOpts) -> Result<()> {
     }
     eprintln!("[diolingo] playing {}", audio.display());
 
+    let position_file = opts.base.join(".overlay-position");
+    if opts.reset_position {
+        let _ = fs::remove_file(&position_file);
+    }
+    let mut position = Position::load(&position_file).unwrap_or(Position::DEFAULT);
+    if opts.left.is_some() {
+        position.left = opts.left;
+    }
+    if let Some(b) = opts.bottom {
+        position.bottom = b;
+    }
     let result = overlay::run(
         cues,
         OverlayOpts {
             width: opts.width,
-            bottom_margin: opts.bottom_margin,
             font_size: opts.font_size,
+            position,
+            position_file,
             font_en: opts.font_en.to_string(),
             font_zh: opts.font_zh.to_string(),
             order: opts.order,

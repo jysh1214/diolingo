@@ -15,17 +15,57 @@ use serde_json::{Value, json};
 use std::io::{BufRead, BufReader};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
+use std::cell::Cell;
+use std::fs;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 pub struct OverlayOpts {
     pub width: i32,
-    pub bottom_margin: i32,
     pub font_size: i32,
     pub font_en: String,
     pub font_zh: String,
     pub order: Order,
+    /// Where the bar sits; dragging it updates and saves this.
+    pub position: Position,
+    /// File the position is saved to after a drag.
+    pub position_file: PathBuf,
+}
+
+/// Bar position as layer-shell margins: `left = None` keeps it centred.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Position {
+    pub left: Option<i32>,
+    pub bottom: i32,
+}
+
+impl Position {
+    pub const DEFAULT: Position = Position { left: None, bottom: 40 };
+
+    /// Parse the saved `left=<px>` / `bottom=<px>` lines; missing file or
+    /// garbage yields `None`.
+    pub fn load(path: &std::path::Path) -> Option<Position> {
+        let text = fs::read_to_string(path).ok()?;
+        let mut pos = Position::DEFAULT;
+        for line in text.lines() {
+            match line.trim().split_once('=') {
+                Some(("left", v)) => pos.left = v.trim().parse().ok(),
+                Some(("bottom", v)) => pos.bottom = v.trim().parse().ok()?,
+                _ => {}
+            }
+        }
+        Some(pos)
+    }
+
+    pub fn save(&self, path: &std::path::Path) -> std::io::Result<()> {
+        let mut text = format!("bottom={}\n", self.bottom);
+        if let Some(l) = self.left {
+            text.push_str(&format!("left={l}\n"));
+        }
+        fs::write(path, text)
+    }
 }
 
 /// Player state mirrored from mpv property-change events.
@@ -99,8 +139,8 @@ fn build_ui(app: &gtk::Application, cues: Rc<Vec<BiCue>>, opts: Rc<OverlayOpts>,
     window.init_layer_shell();
     window.set_layer(Layer::Overlay);
     window.set_namespace(Some("diolingo"));
-    window.set_anchor(Edge::Bottom, true);
-    window.set_margin(Edge::Bottom, opts.bottom_margin);
+    let position = Rc::new(Cell::new(opts.position));
+    apply_position(&window, opts.position);
     window.set_keyboard_mode(KeyboardMode::None);
     window.set_decorated(false);
     window.set_default_size(opts.width, -1);
@@ -134,7 +174,48 @@ fn build_ui(app: &gtk::Application, cues: Rc<Vec<BiCue>>, opts: Rc<OverlayOpts>,
     bar.append(&status);
     window.set_child(Some(&bar));
 
-    // Wheel: volume. Click: pause/resume.
+    // Drag: move the bar (layer-shell surfaces cannot be moved by the compositor).
+    // Offsets are relative to the press point in surface coordinates, and the
+    // surface follows the pointer, so each update carries only the new movement.
+    let drag = gtk::GestureDrag::new();
+    let dragged = Rc::new(Cell::new(false));
+    {
+        let d = dragged.clone();
+        drag.connect_drag_begin(move |_, _, _| d.set(false));
+    }
+    {
+        let (w, p, d) = (window.clone(), position.clone(), dragged.clone());
+        drag.connect_drag_update(move |_, dx, dy| {
+            if dx.abs() < 1.0 && dy.abs() < 1.0 {
+                return;
+            }
+            d.set(true);
+            let cur = p.get();
+            let left = cur.left.unwrap_or_else(|| centred_left(&w));
+            let (screen_w, screen_h) = screen_size(&w);
+            let next = Position {
+                left: Some((left + dx.round() as i32).clamp(0, (screen_w - w.width()).max(0))),
+                bottom: (cur.bottom - dy.round() as i32).clamp(0, (screen_h - w.height()).max(0)),
+            };
+            if next != cur {
+                p.set(next);
+                apply_position(&w, next);
+            }
+        });
+    }
+    {
+        let (p, d, file) = (position.clone(), dragged.clone(), opts.position_file.clone());
+        drag.connect_drag_end(move |_, _, _| {
+            if d.get()
+                && let Err(e) = p.get().save(&file)
+            {
+                eprintln!("[diolingo] could not save the bar position: {e}");
+            }
+        });
+    }
+    window.add_controller(drag);
+
+    // Wheel: volume. Click (without dragging): pause/resume.
     let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
     let ctl = control.clone();
     scroll.connect_scroll(move |_, _dx, dy| {
@@ -147,7 +228,11 @@ fn build_ui(app: &gtk::Application, cues: Rc<Vec<BiCue>>, opts: Rc<OverlayOpts>,
     window.add_controller(scroll);
     let click = gtk::GestureClick::new();
     let ctl = control.clone();
+    let dragged_ref = dragged.clone();
     click.connect_released(move |_, _, _, _| {
+        if dragged_ref.get() {
+            return;
+        }
         if let Ok(mut s) = ctl.lock() {
             let _ = mpv::send(&mut s, &json!({ "command": ["cycle", "pause"] }));
         }
@@ -201,6 +286,35 @@ fn build_ui(app: &gtk::Application, cues: Rc<Vec<BiCue>>, opts: Rc<OverlayOpts>,
     window.present();
 }
 
+fn apply_position(window: &gtk::ApplicationWindow, pos: Position) {
+    window.set_anchor(Edge::Bottom, true);
+    window.set_margin(Edge::Bottom, pos.bottom);
+    match pos.left {
+        Some(l) => {
+            window.set_anchor(Edge::Left, true);
+            window.set_margin(Edge::Left, l);
+        }
+        None => window.set_anchor(Edge::Left, false),
+    }
+}
+
+/// Logical size of the monitor the bar is on (falls back to 1920x1080).
+fn screen_size(window: &gtk::ApplicationWindow) -> (i32, i32) {
+    let display = gtk::gdk::Display::default();
+    let monitor = display.as_ref().and_then(|d| {
+        window
+            .surface()
+            .and_then(|s| d.monitor_at_surface(&s))
+            .or_else(|| d.monitors().item(0).and_downcast::<gtk::gdk::Monitor>())
+    });
+    monitor.map(|m| (m.geometry().width(), m.geometry().height())).unwrap_or((1920, 1080))
+}
+
+/// Left margin the bar currently has while centred.
+fn centred_left(window: &gtk::ApplicationWindow) -> i32 {
+    ((screen_size(window).0 - window.width()) / 2).max(0)
+}
+
 /// Index of the cue covering `t_ms`, if any (cues are sorted, non-overlapping).
 fn current_cue(cues: &[BiCue], t_ms: u64) -> Option<usize> {
     let i = cues.partition_point(|c| c.start_ms <= t_ms).checked_sub(1)?;
@@ -223,6 +337,17 @@ fn stylesheet(o: &OverlayOpts) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn position_round_trip() {
+        let path = std::env::temp_dir().join(format!("diolingo-pos-{}", std::process::id()));
+        Position { left: Some(120), bottom: 300 }.save(&path).unwrap();
+        assert_eq!(Position::load(&path), Some(Position { left: Some(120), bottom: 300 }));
+        Position { left: None, bottom: 40 }.save(&path).unwrap();
+        assert_eq!(Position::load(&path), Some(Position::DEFAULT));
+        fs::remove_file(&path).unwrap();
+        assert_eq!(Position::load(&path), None);
+    }
 
     #[test]
     fn cue_lookup() {

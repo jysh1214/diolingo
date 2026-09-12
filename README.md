@@ -133,9 +133,10 @@ focus. It follows mpv's playback position over the IPC socket
 (`$XDG_RUNTIME_DIR/diolingo-mpv.sock`) and disappears between cues. Starting
 `play` again replaces the running player.
 
-On the bar: mouse wheel changes the volume (±5, shown briefly), a click
-pauses or resumes. Everything else goes through `diolingo ctl`, which forwards
-any mpv input command to the player:
+On the bar: drag it to move it (the position is remembered in
+`~/.diolingo/.overlay-position`), mouse wheel changes the volume (±5, shown
+briefly), a click pauses or resumes. Everything else goes through
+`diolingo ctl`, which forwards any mpv input command to the player:
 
 ```sh
 diolingo ctl sub-seek -1      # previous subtitle line
@@ -163,9 +164,10 @@ binds {
 }
 ```
 
-Options: `--width N` (bar width, default 1600), `--bottom N` (gap to the
-screen edge, default 40), `--font-size N` (English size, default 40, Chinese
-90% of it), `--volume N`, `--order zh-en`, `--font-en` / `--font-zh` (used as
+Options: `--width N` (bar width, default 1600), `--left N` / `--bottom N`
+(position in pixels; default is the last dragged position, else centred and
+40 px up), `--reset-position` (forget the dragged position), `--font-size N`
+(English size, default 40, Chinese 90% of it), `--volume N`, `--order zh-en`, `--font-en` / `--font-zh` (used as
 CSS font families), `--mpv-arg=...` forwarded to mpv, `--dry-run` to print
 the mpv command. Requires GTK 4 and gtk4-layer-shell at build time (Arch:
 `gtk4`, `gtk4-layer-shell`) and mpv at run time.
