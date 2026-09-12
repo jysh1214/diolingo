@@ -121,7 +121,7 @@ diolingo --en-lang en-orig URL
 ## Listening with an always-on-top subtitle overlay
 
 ```sh
-diolingo play 5C_HPTJg5ek
+diolingo play ID
 ```
 
 `play` takes the video id (the bracketed part of the folder name), finds the
@@ -148,21 +148,9 @@ diolingo ctl ab-loop           # set A, then B, then clear
 diolingo ctl quit
 ```
 
-Bind them to global keys in the compositor so they work while a game or
-another window has focus. For niri (`~/.config/niri/config.kdl`, using the
-installed binary's absolute path because niri's PATH may not include
-`~/.cargo/bin`):
-
-```kdl
-binds {
-    Ctrl+Alt+Left   { spawn "/home/alex/.cargo/bin/diolingo" "ctl" "sub-seek" "-1"; }
-    Ctrl+Alt+Right  { spawn "/home/alex/.cargo/bin/diolingo" "ctl" "sub-seek" "1"; }
-    Ctrl+Alt+Up     { spawn "/home/alex/.cargo/bin/diolingo" "ctl" "add" "volume" "5"; }
-    Ctrl+Alt+Down   { spawn "/home/alex/.cargo/bin/diolingo" "ctl" "add" "volume" "-5"; }
-    Ctrl+Alt+Space  { spawn "/home/alex/.cargo/bin/diolingo" "ctl" "cycle" "pause"; }
-    Ctrl+Alt+Q      { spawn "/home/alex/.cargo/bin/diolingo" "ctl" "quit"; }
-}
-```
+Bind them to global keys in your compositor so they work while a game or
+another window has focus (use the installed binary's absolute path if the
+compositor's `PATH` does not include `~/.cargo/bin`).
 
 Options: `--width N` (bar width, default 1600), `--left N` / `--bottom N`
 (position in pixels; default is the last dragged position, else centred and
