@@ -3,6 +3,8 @@
 mod align;
 mod captions;
 mod ffmpeg;
+mod mpv;
+mod overlay;
 mod play;
 mod qwen;
 mod subs;
@@ -120,8 +122,10 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Play a downloaded video's audio with a floating window showing the bilingual subtitles (needs mpv)
+    /// Play a downloaded video's audio with an always-on-top subtitle overlay (needs mpv)
     Play(PlayArgs),
+    /// Send an mpv command to the running player, e.g. `ctl sub-seek -1`, `ctl cycle pause`, `ctl add volume 5`
+    Ctl(CtlArgs),
 }
 
 #[derive(Args, Debug)]
@@ -129,13 +133,17 @@ struct PlayArgs {
     /// YouTube video id (the part in [brackets] of the folder name)
     target: String,
 
-    /// Floating window size as WIDTHxHEIGHT (just tall enough for the two lines at the default font size)
-    #[arg(long, default_value = "1600x110")]
-    geometry: String,
+    /// Width of the subtitle bar in pixels (it is centred at the bottom of the screen)
+    #[arg(long, default_value_t = 1600)]
+    width: i32,
+
+    /// Gap between the bar and the bottom screen edge, in pixels
+    #[arg(long, default_value_t = 40)]
+    bottom: i32,
 
     /// English font size in pixels (Chinese is 90% of it)
     #[arg(long, default_value_t = 40)]
-    font_size: u32,
+    font_size: i32,
 
     /// Initial volume in percent (default: mpv's own setting)
     #[arg(long)]
@@ -148,6 +156,13 @@ struct PlayArgs {
     /// Print the mpv command instead of running it
     #[arg(long)]
     dry_run: bool,
+}
+
+#[derive(Args, Debug)]
+struct CtlArgs {
+    /// mpv command and its arguments (see mpv's "List of Input Commands")
+    #[arg(required = true, allow_hyphen_values = true, trailing_var_arg = true)]
+    words: Vec<String>,
 }
 
 /// Where a video's files live. All paths are absolute so ffmpeg can run from
@@ -200,25 +215,24 @@ fn main() -> Result<()> {
         work_base: cli.work.as_ref().map(std::path::absolute).transpose().context("resolving --work")?,
     };
 
-    if let Some(Command::Play(p)) = &cli.command {
-        let (w, h) = p
-            .geometry
-            .split_once('x')
-            .and_then(|(w, h)| Some((w.parse::<u32>().ok()?, h.parse::<u32>().ok()?)))
-            .filter(|&(w, h)| w > 0 && h > 0)
-            .with_context(|| format!("--geometry must be WIDTHxHEIGHT, got {:?}", p.geometry))?;
-        return play::run(&play::PlayOpts {
-            base: &layout.out_base.join(".diolingo"),
-            target: &p.target,
-            geometry: (w, h),
-            font_size: p.font_size,
-            order: cli.order,
-            font_en: &cli.font_en,
-            font_zh: &cli.font_zh,
-            mpv_args: &p.mpv_args,
-            volume: p.volume,
-            dry_run: p.dry_run,
-        });
+    match &cli.command {
+        Some(Command::Ctl(c)) => return play::ctl(&c.words),
+        Some(Command::Play(p)) => {
+            return play::run(&play::PlayOpts {
+                base: &layout.out_base.join(".diolingo"),
+                target: &p.target,
+                width: p.width.max(200),
+                bottom_margin: p.bottom.max(0),
+                font_size: p.font_size.max(8),
+                order: cli.order,
+                font_en: &cli.font_en,
+                font_zh: &cli.font_zh,
+                mpv_args: &p.mpv_args,
+                volume: p.volume,
+                dry_run: p.dry_run,
+            });
+        }
+        None => {}
     }
 
     let mut common_args = Vec::new();

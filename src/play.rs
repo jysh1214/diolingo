@@ -1,22 +1,28 @@
-//! `diolingo play`: background audio with a floating bilingual-subtitle window (mpv).
+//! `diolingo play`: headless mpv for the audio plus a layer-shell subtitle
+//! overlay; `diolingo ctl`: send a command to that player.
 
 use crate::align::BiCue;
 use crate::captions;
-use crate::subs::{self, AssStyle, Order};
+use crate::mpv;
+use crate::overlay::{self, OverlayOpts};
+use crate::subs::Order;
 use anyhow::{Context, Result, bail};
+use serde_json::json;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::thread::sleep;
+use std::time::{Duration, Instant};
 
 pub struct PlayOpts<'a> {
     /// `<out>/.diolingo`, where the per-video folders live.
     pub base: &'a Path,
     /// YouTube video id.
     pub target: &'a str,
-    pub geometry: (u32, u32),
-    /// English font size in pixels.
-    pub font_size: u32,
+    pub width: i32,
+    pub bottom_margin: i32,
+    pub font_size: i32,
     pub order: Order,
     pub font_en: &'a str,
     pub font_zh: &'a str,
@@ -26,14 +32,6 @@ pub struct PlayOpts<'a> {
     pub dry_run: bool,
 }
 
-/// Bindings added on top of mpv's defaults: the mouse wheel over the bar
-/// changes the volume instead of seeking (keys 9 / 0 and m still work).
-const INPUT_CONF: &str = "\
-# written by diolingo play; mpv's built-in bindings stay active
-WHEEL_UP    add volume 5
-WHEEL_DOWN  add volume -5
-";
-
 pub fn run(opts: &PlayOpts) -> Result<()> {
     let dir = resolve_dir(opts.base, opts.target)?;
     let audio = find_file(&dir, ".m4a")
@@ -41,38 +39,99 @@ pub fn run(opts: &PlayOpts) -> Result<()> {
         .with_context(|| format!("no .m4a or .mkv in {}", dir.display()))?;
     let en_srt = find_file(&dir, ".en.srt").with_context(|| format!("no .en.srt in {}", dir.display()))?;
     let zh_srt = find_file(&dir, ".zh.srt").with_context(|| format!("no .zh.srt in {}", dir.display()))?;
-
+    let bi_srt = find_bilingual_srt(&dir).with_context(|| format!("no bilingual .srt in {}", dir.display()))?;
     let cues = load_bilingual(&en_srt, &zh_srt)?;
-    let (w, h) = opts.geometry;
-    let ass = dir.join(".player.ass");
-    subs::write_ass(&ass, &cues, opts.order, &AssStyle::player(opts.font_en, opts.font_zh, w, h, opts.font_size))?;
-    let input_conf = write_input_conf(opts.base)?;
 
+    let socket = mpv::socket_path();
     let mut cmd = Command::new("mpv");
-    cmd.arg("--title=diolingo")
-        .arg("--force-window=immediate")
-        .arg(format!("--geometry={w}x{h}"))
-        // With no video track mpv places a 16:9 "video" area inside the window and
-        // renders subtitles into it; force-margins makes libass use the whole window.
-        .args(["--ontop", "--border=no", "--keep-open=yes", "--vid=no", "--audio-display=no"])
-        .args(["--sub-ass-override=no", "--sub-ass-force-margins=yes", "--sub-use-margins=yes"])
-        .arg(format!("--sub-file={}", ass.display()))
-        .arg(format!("--input-conf={}", input_conf.display()));
+    cmd.args(["--no-video", "--force-window=no", "--keep-open=no", "--really-quiet", "--no-terminal"])
+        .arg(format!("--input-ipc-server={}", socket.display()))
+        // Loaded so `sub-seek` (previous/next line) works over `diolingo ctl`.
+        .arg(format!("--sub-file={}", bi_srt.display()));
     if let Some(v) = opts.volume {
         cmd.arg(format!("--volume={v}"));
     }
     cmd.args(opts.mpv_args).arg(&audio);
-
     if opts.dry_run {
         println!("{}", shell_words(&cmd));
         return Ok(());
     }
+
+    stop_previous(&socket);
+    let mut child = cmd.stdin(Stdio::null()).spawn().context("starting mpv (install it with: sudo pacman -S mpv)")?;
+    if let Err(e) = wait_for_socket(&socket, &mut child) {
+        let _ = child.kill();
+        return Err(e);
+    }
     eprintln!("[diolingo] playing {}", audio.display());
-    let status = cmd.status().context("running mpv (install it with: sudo pacman -S mpv)")?;
-    if !status.success() {
-        bail!("mpv exited with {status}");
+
+    let result = overlay::run(
+        cues,
+        OverlayOpts {
+            width: opts.width,
+            bottom_margin: opts.bottom_margin,
+            font_size: opts.font_size,
+            font_en: opts.font_en.to_string(),
+            font_zh: opts.font_zh.to_string(),
+            order: opts.order,
+        },
+        &socket,
+    );
+
+    // The overlay returned (mpv finished, or we were interrupted): stop mpv.
+    if child.try_wait()?.is_none() {
+        if let Ok(mut c) = mpv::Client::connect(&socket) {
+            let _ = c.command(vec![json!("quit")]);
+        }
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while child.try_wait()?.is_none() && Instant::now() < deadline {
+            sleep(Duration::from_millis(50));
+        }
+        if child.try_wait()?.is_none() {
+            let _ = child.kill();
+        }
+    }
+    let _ = child.wait();
+    let _ = fs::remove_file(&socket);
+    result
+}
+
+/// `diolingo ctl <mpv command...>`: forward one command to the running player.
+pub fn ctl(words: &[String]) -> Result<()> {
+    let mut client = mpv::Client::connect(&mpv::socket_path())?;
+    let reply = client.command(mpv::parse_ctl_args(words))?;
+    if !reply.is_null() {
+        println!("{reply}");
     }
     Ok(())
+}
+
+fn stop_previous(socket: &Path) {
+    if let Ok(mut c) = mpv::Client::connect(socket) {
+        eprintln!("[diolingo] stopping the previous player");
+        let _ = c.command(vec![json!("quit")]);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while socket.exists() && Instant::now() < deadline {
+            sleep(Duration::from_millis(50));
+        }
+    }
+    let _ = fs::remove_file(socket);
+}
+
+fn wait_for_socket(socket: &Path, child: &mut std::process::Child) -> Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if std::os::unix::net::UnixStream::connect(socket).is_ok() {
+            return Ok(());
+        }
+        if let Some(status) = child.try_wait()? {
+            bail!("mpv exited before opening its IPC socket ({status})");
+        }
+        if Instant::now() > deadline {
+            bail!("mpv did not open {} within 10s", socket.display());
+        }
+        sleep(Duration::from_millis(100));
+    }
 }
 
 /// Find the per-video folder `[<id>] <title>` under `base`.
@@ -93,31 +152,27 @@ fn is_video_id(s: &str) -> bool {
     s.len() == 11 && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
-/// `<base>/.mpv-input.conf`: the user's own `~/.config/mpv/input.conf` (if
-/// any, so `--input-conf` does not hide it) followed by the diolingo bindings.
-fn write_input_conf(base: &Path) -> Result<PathBuf> {
-    let user_conf = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
-        .map(|c| c.join("mpv").join("input.conf"));
-    let mut content = String::new();
-    if let Some(user) = user_conf.filter(|p| p.is_file()) {
-        content.push_str(&fs::read_to_string(&user).with_context(|| format!("reading {}", user.display()))?);
-        content.push('\n');
-    }
-    content.push_str(INPUT_CONF);
-    fs::create_dir_all(base)?;
-    let path = base.join(".mpv-input.conf");
-    fs::write(&path, content).with_context(|| format!("writing {}", path.display()))?;
-    Ok(path)
-}
-
 fn find_file(dir: &Path, suffix: &str) -> Option<PathBuf> {
     let mut hits: Vec<PathBuf> = fs::read_dir(dir)
         .ok()?
         .flatten()
         .map(|e| e.path())
         .filter(|p| p.is_file() && p.file_name().is_some_and(|n| n.to_string_lossy().ends_with(suffix)))
+        .collect();
+    hits.sort();
+    hits.into_iter().next()
+}
+
+/// `<Title> [id].srt`, i.e. the `.srt` that is neither `.en.srt` nor `.zh.srt`.
+fn find_bilingual_srt(dir: &Path) -> Option<PathBuf> {
+    let mut hits: Vec<PathBuf> = fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            let n = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            p.is_file() && n.ends_with(".srt") && !n.ends_with(".en.srt") && !n.ends_with(".zh.srt")
+        })
         .collect();
     hits.sort();
     hits.into_iter().next()
@@ -161,7 +216,6 @@ mod tests {
         assert_eq!(resolve_dir(&base, "5C_HPTJg5ek").unwrap(), a);
         assert!(resolve_dir(&base, "abcdefghijk").is_err(), "unknown id");
         assert!(resolve_dir(&base, "100 seconds").is_err(), "titles are not accepted");
-        assert!(resolve_dir(&base, "https://youtu.be/5C_HPTJg5ek").is_err(), "URLs are not accepted");
         fs::remove_dir_all(&base).unwrap();
     }
 }

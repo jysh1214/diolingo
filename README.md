@@ -42,7 +42,9 @@ need to stay around after installing.
 - `yt-dlp` on PATH (`uv tool install yt-dlp`) plus a JS runtime it can use
   (`deno` on PATH; yt-dlp warns and may miss formats without one).
 - `ffmpeg` built with libass (renders the hard-subbed copy).
-- `mpv` for `diolingo play` (optional; `sudo pacman -S mpv` on Arch).
+- `mpv`, GTK 4 and `gtk4-layer-shell` for `diolingo play` (Arch:
+  `sudo pacman -S mpv gtk4 gtk4-layer-shell`; the GTK libraries are also
+  needed to build).
 - An NVIDIA GPU. Qwen3-8B in bf16 needs about 17 GB of VRAM; see the model
   table below for smaller or quantised options.
 - Fonts for the styled track: defaults are `Noto Sans` and `Noto Sans CJK TC`
@@ -116,42 +118,57 @@ diolingo --list-subs URL
 diolingo --en-lang en-orig URL
 ```
 
-## Listening with a floating subtitle bar
+## Listening with an always-on-top subtitle overlay
 
 ```sh
 diolingo play 5C_HPTJg5ek
 ```
 
 `play` takes the video id (the bracketed part of the folder name), finds the
-folder under `~/.diolingo/` (or `--out DIR`), writes
-a subtitle file sized for the window (`.player.ass`, rebuilt each time from
-the `.en.srt` / `.zh.srt` sidecars), and starts `mpv` on the `.m4a` with a
-borderless, always-on-top window that shows only the bilingual subtitles.
-`--geometry WxH` sets the window size (default `1600x110`, a bar just tall
-enough for the two lines), `--font-size N` the English size in pixels
-(default 40, Chinese 90% of it; raise the height too if you enlarge it),
-`--volume N` sets the starting volume,
-`--order zh-en` and `--font-*` apply as for the video, `--mpv-arg=...`
-forwards options to mpv, and `--dry-run` prints the command instead of
-running it.
+folder under `~/.diolingo/` (or `--out DIR`), starts `mpv` headless on the
+`.m4a`, and draws the bilingual subtitles itself in a bar at the bottom of the
+screen. The bar is a layer-shell surface on the *overlay* layer, so it stays
+above every window, fullscreen games included, and never takes keyboard
+focus. It follows mpv's playback position over the IPC socket
+(`$XDG_RUNTIME_DIR/diolingo-mpv.sock`) and disappears between cues. Starting
+`play` again replaces the running player.
 
-Volume: scroll the mouse wheel over the bar (±5 per notch; diolingo adds this
-binding on top of mpv's defaults, your own `~/.config/mpv/input.conf` is kept),
-or use mpv's keys `9` / `0` and `m` for mute. Other default keys handy for
-study: `Ctrl+←`/`Ctrl+→` jump to the previous or next subtitle line, `l` sets
-an A-B loop, `[` / `]` change speed, `v` toggles subtitles, `q` quits.
+On the bar: mouse wheel changes the volume (±5, shown briefly), a click
+pauses or resumes. Everything else goes through `diolingo ctl`, which forwards
+any mpv input command to the player:
 
-On niri, a window rule makes the bar float at the bottom of the screen
-(add it to `~/.config/niri/config.kdl`; mpv sets `title=diolingo` so the rule
-only matches this window):
+```sh
+diolingo ctl sub-seek -1      # previous subtitle line
+diolingo ctl sub-seek 1       # next line
+diolingo ctl cycle pause
+diolingo ctl add volume 5
+diolingo ctl seek -10
+diolingo ctl ab-loop           # set A, then B, then clear
+diolingo ctl quit
+```
+
+Bind them to global keys in the compositor so they work while a game or
+another window has focus. For niri (`~/.config/niri/config.kdl`, using the
+installed binary's absolute path because niri's PATH may not include
+`~/.cargo/bin`):
 
 ```kdl
-window-rule {
-    match app-id="mpv" title="diolingo"
-    open-floating true
-    default-floating-position x=0 y=40 relative-to="bottom"
+binds {
+    Ctrl+Alt+Left   { spawn "/home/alex/.cargo/bin/diolingo" "ctl" "sub-seek" "-1"; }
+    Ctrl+Alt+Right  { spawn "/home/alex/.cargo/bin/diolingo" "ctl" "sub-seek" "1"; }
+    Ctrl+Alt+Up     { spawn "/home/alex/.cargo/bin/diolingo" "ctl" "add" "volume" "5"; }
+    Ctrl+Alt+Down   { spawn "/home/alex/.cargo/bin/diolingo" "ctl" "add" "volume" "-5"; }
+    Ctrl+Alt+Space  { spawn "/home/alex/.cargo/bin/diolingo" "ctl" "cycle" "pause"; }
+    Ctrl+Alt+Q      { spawn "/home/alex/.cargo/bin/diolingo" "ctl" "quit"; }
 }
 ```
+
+Options: `--width N` (bar width, default 1600), `--bottom N` (gap to the
+screen edge, default 40), `--font-size N` (English size, default 40, Chinese
+90% of it), `--volume N`, `--order zh-en`, `--font-en` / `--font-zh` (used as
+CSS font families), `--mpv-arg=...` forwarded to mpv, `--dry-run` to print
+the mpv command. Requires GTK 4 and gtk4-layer-shell at build time (Arch:
+`gtk4`, `gtk4-layer-shell`) and mpv at run time.
 
 ## Other options
 
