@@ -1,0 +1,9 @@
+/target
+__pycache__/
+.venv-qwen/
+.diolingo/
+*.mkv
+*.mp4
+*.webm
+*.srt
+*.ass
