@@ -1,23 +1,26 @@
-//! Layer-shell overlay (GTK4): a subtitle bar on the `overlay` layer, above
-//! every window including fullscreen ones. It follows mpv's `time-pos` over
-//! IPC and shows the cue for that moment; the mouse wheel changes the volume
-//! and a click toggles pause. It never takes keyboard focus.
+//! Layer-shell overlay (GTK4): a transparent, monitor-sized surface on the
+//! `overlay` layer (above every window, fullscreen ones included) that draws
+//! the subtitle bar at a chosen spot. The surface itself never moves, so
+//! pointer coordinates are screen coordinates and dragging the bar is exact;
+//! the input region is limited to the bar, so everything else stays
+//! click-through. The bar follows mpv's `time-pos` over IPC; the wheel changes
+//! the volume, a click toggles pause. It never takes keyboard focus.
 
 use crate::align::BiCue;
 use crate::mpv;
 use crate::subs::Order;
 use anyhow::{Context, Result};
 use gtk4 as gtk;
+use gtk4::cairo;
 use gtk4::glib;
 use gtk4::prelude::*;
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use serde_json::{Value, json};
-use std::io::{BufRead, BufReader};
-use std::os::unix::net::UnixStream;
-use std::path::Path;
 use std::cell::Cell;
 use std::fs;
-use std::path::PathBuf;
+use std::io::{BufRead, BufReader};
+use std::os::unix::net::UnixStream;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -34,7 +37,8 @@ pub struct OverlayOpts {
     pub position_file: PathBuf,
 }
 
-/// Bar position as layer-shell margins: `left = None` keeps it centred.
+/// Bar position in screen pixels: distance from the left edge (`None` keeps
+/// it centred) and from the bottom edge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Position {
     pub left: Option<i32>,
@@ -46,7 +50,7 @@ impl Position {
 
     /// Parse the saved `left=<px>` / `bottom=<px>` lines; missing file or
     /// garbage yields `None`.
-    pub fn load(path: &std::path::Path) -> Option<Position> {
+    pub fn load(path: &Path) -> Option<Position> {
         let text = fs::read_to_string(path).ok()?;
         let mut pos = Position::DEFAULT;
         for line in text.lines() {
@@ -59,7 +63,7 @@ impl Position {
         Some(pos)
     }
 
-    pub fn save(&self, path: &std::path::Path) -> std::io::Result<()> {
+    pub fn save(&self, path: &Path) -> std::io::Result<()> {
         let mut text = format!("bottom={}\n", self.bottom);
         if let Some(l) = self.left {
             text.push_str(&format!("left={l}\n"));
@@ -126,6 +130,72 @@ fn spawn_reader(stream: UnixStream, shared: Arc<Mutex<Shared>>) {
     });
 }
 
+/// Where the bar was last placed, to skip redundant GTK/GDK calls.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Placement {
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    visible: bool,
+}
+
+/// Places the bar inside the monitor-sized surface and keeps the surface's
+/// input region equal to the bar.
+struct Layout {
+    window: gtk::ApplicationWindow,
+    fixed: gtk::Fixed,
+    bar: gtk::Box,
+    width: i32,
+    last: Cell<Option<Placement>>,
+}
+
+impl Layout {
+    /// Logical size of the surface (= the monitor once mapped).
+    fn screen(&self) -> (i32, i32) {
+        let (w, h) = (self.window.width(), self.window.height());
+        if w > 0 && h > 0 {
+            return (w, h);
+        }
+        gtk::gdk::Display::default()
+            .and_then(|d| d.monitors().item(0).and_downcast::<gtk::gdk::Monitor>())
+            .map(|m| (m.geometry().width(), m.geometry().height()))
+            .unwrap_or((1920, 1080))
+    }
+
+    fn bar_size(&self) -> (i32, i32) {
+        let (_, natural_h, _, _) = self.bar.measure(gtk::Orientation::Vertical, self.width);
+        (self.width, natural_h.max(1))
+    }
+
+    /// The bar's left edge for `pos` (centred when `pos.left` is `None`).
+    fn left_of(&self, pos: Position) -> i32 {
+        let (sw, _) = self.screen();
+        pos.left.unwrap_or((sw - self.width) / 2).clamp(0, (sw - self.width).max(0))
+    }
+
+    fn place(&self, pos: Position, visible: bool) {
+        let (_, sh) = self.screen();
+        let (bw, bh) = self.bar_size();
+        let x = self.left_of(pos);
+        let y = (sh - pos.bottom - bh).max(0);
+        let placement = Placement { x, y, w: bw, h: bh, visible };
+        if self.last.get() == Some(placement) {
+            return;
+        }
+        self.last.set(Some(placement));
+        self.fixed.move_(&self.bar, f64::from(x), f64::from(y));
+        if let Some(surface) = self.window.surface() {
+            let region = if visible {
+                cairo::Region::create_rectangle(&cairo::RectangleInt::new(x, y, bw, bh))
+            } else {
+                cairo::Region::create()
+            };
+            surface.set_input_region(Some(&region));
+        }
+    }
+}
+
 fn build_ui(app: &gtk::Application, cues: Rc<Vec<BiCue>>, opts: Rc<OverlayOpts>, shared: Arc<Mutex<Shared>>, control: Arc<Mutex<UnixStream>>) {
     let css = gtk::CssProvider::new();
     css.load_from_string(&stylesheet(&opts));
@@ -139,16 +209,21 @@ fn build_ui(app: &gtk::Application, cues: Rc<Vec<BiCue>>, opts: Rc<OverlayOpts>,
     window.init_layer_shell();
     window.set_layer(Layer::Overlay);
     window.set_namespace(Some("diolingo"));
-    let position = Rc::new(Cell::new(opts.position));
-    apply_position(&window, opts.position);
+    for edge in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
+        window.set_anchor(edge, true);
+    }
+    window.set_exclusive_zone(-1);
     window.set_keyboard_mode(KeyboardMode::None);
     window.set_decorated(false);
-    window.set_default_size(opts.width, -1);
 
+    let fixed = gtk::Fixed::new();
     let bar = gtk::Box::new(gtk::Orientation::Vertical, 2);
     bar.add_css_class("bar");
     bar.set_size_request(opts.width, -1);
-    let make_label = |class: &str| {
+    bar.set_visible(false);
+    // Inside a GtkFixed a label would otherwise grow to its unwrapped width.
+    let usable = opts.width - 56;
+    let make_label = |class: &str, px: i32| {
         let l = gtk::Label::new(None);
         l.add_css_class(class);
         l.set_wrap(true);
@@ -156,11 +231,12 @@ fn build_ui(app: &gtk::Application, cues: Rc<Vec<BiCue>>, opts: Rc<OverlayOpts>,
         l.set_justify(gtk::Justification::Center);
         l.set_halign(gtk::Align::Center);
         l.set_hexpand(true);
+        l.set_max_width_chars((f64::from(usable) / (f64::from(px) * 0.6)).max(10.0) as i32);
         l
     };
-    let en = make_label("en");
-    let zh = make_label("zh");
-    let status = make_label("status");
+    let en = make_label("en", opts.font_size);
+    let zh = make_label("zh", (opts.font_size as f32 * 0.9).round() as i32);
+    let status = make_label("status", opts.font_size / 2);
     match opts.order {
         Order::EnZh => {
             bar.append(&en);
@@ -172,34 +248,41 @@ fn build_ui(app: &gtk::Application, cues: Rc<Vec<BiCue>>, opts: Rc<OverlayOpts>,
         }
     }
     bar.append(&status);
-    window.set_child(Some(&bar));
+    fixed.put(&bar, 0.0, 0.0);
+    window.set_child(Some(&fixed));
 
-    // Drag: move the bar (layer-shell surfaces cannot be moved by the compositor).
-    // Offsets are relative to the press point in surface coordinates, and the
-    // surface follows the pointer, so each update carries only the new movement.
+    let position = Rc::new(Cell::new(opts.position));
+    let layout = Rc::new(Layout { window: window.clone(), fixed, bar: bar.clone(), width: opts.width, last: Cell::new(None) });
+
+    // Drag: move the bar. The gesture sits on the window, whose coordinates are
+    // the monitor's, so the offsets are exact however the bar moves.
     let drag = gtk::GestureDrag::new();
+    let start = Rc::new(Cell::new(Position::DEFAULT));
     let dragged = Rc::new(Cell::new(false));
     {
-        let d = dragged.clone();
-        drag.connect_drag_begin(move |_, _, _| d.set(false));
+        let (l, p, s, d) = (layout.clone(), position.clone(), start.clone(), dragged.clone());
+        drag.connect_drag_begin(move |_, _, _| {
+            s.set(Position { left: Some(l.left_of(p.get())), bottom: p.get().bottom });
+            d.set(false);
+        });
     }
     {
-        let (w, p, d) = (window.clone(), position.clone(), dragged.clone());
-        drag.connect_drag_update(move |_, dx, dy| {
-            if dx.abs() < 1.0 && dy.abs() < 1.0 {
+        let (l, p, s, d) = (layout.clone(), position.clone(), start.clone(), dragged.clone());
+        drag.connect_drag_update(move |_, ox, oy| {
+            if !d.get() && ox.abs() < 3.0 && oy.abs() < 3.0 {
                 return;
             }
             d.set(true);
-            let cur = p.get();
-            let left = cur.left.unwrap_or_else(|| centred_left(&w));
-            let (screen_w, screen_h) = screen_size(&w);
+            let st = s.get();
+            let (sw, sh) = l.screen();
+            let (bw, bh) = l.bar_size();
             let next = Position {
-                left: Some((left + dx.round() as i32).clamp(0, (screen_w - w.width()).max(0))),
-                bottom: (cur.bottom - dy.round() as i32).clamp(0, (screen_h - w.height()).max(0)),
+                left: Some((st.left.unwrap_or(0) + ox.round() as i32).clamp(0, (sw - bw).max(0))),
+                bottom: (st.bottom - oy.round() as i32).clamp(0, (sh - bh).max(0)),
             };
-            if next != cur {
+            if next != p.get() {
                 p.set(next);
-                apply_position(&w, next);
+                l.place(next, true);
             }
         });
     }
@@ -241,7 +324,6 @@ fn build_ui(app: &gtk::Application, cues: Rc<Vec<BiCue>>, opts: Rc<OverlayOpts>,
 
     // Refresh from the mirrored player state; quit when mpv is gone.
     let app_ref = app.clone();
-    let window_ref = window.clone();
     let mut last: Option<(usize, bool, String)> = None;
     glib::timeout_add_local(Duration::from_millis(40), move || {
         let (time_ms, paused, volume, show_volume, alive) = {
@@ -259,60 +341,31 @@ fn build_ui(app: &gtk::Application, cues: Rc<Vec<BiCue>>, opts: Rc<OverlayOpts>,
             _ => String::new(),
         };
         let key = (idx.unwrap_or(usize::MAX), paused, status_text.clone());
-        if last.as_ref() == Some(&key) {
-            return glib::ControlFlow::Continue;
-        }
-        last = Some(key);
-        match idx {
-            Some(i) => {
-                en.set_text(&cues[i].en);
-                zh.set_text(&cues[i].zh);
-                en.set_visible(!cues[i].en.is_empty());
-                zh.set_visible(!cues[i].zh.is_empty());
+        if last.as_ref() != Some(&key) {
+            last = Some(key);
+            match idx {
+                Some(i) => {
+                    en.set_text(&cues[i].en);
+                    zh.set_text(&cues[i].zh);
+                    en.set_visible(!cues[i].en.is_empty());
+                    zh.set_visible(!cues[i].zh.is_empty());
+                }
+                None => {
+                    en.set_visible(false);
+                    zh.set_visible(false);
+                }
             }
-            None => {
-                en.set_visible(false);
-                zh.set_visible(false);
-            }
+            status.set_text(&status_text);
+            status.set_visible(!status_text.is_empty());
+            bar.set_visible(idx.is_some() || !status_text.is_empty());
         }
-        status.set_text(&status_text);
-        status.set_visible(!status_text.is_empty());
-        window_ref.set_visible(idx.is_some() || !status_text.is_empty());
+        layout.place(position.get(), bar.is_visible());
         glib::ControlFlow::Continue
     });
 
     // Ctrl-C in the terminal reaches mpv as well (same process group); its exit
     // closes the socket, which ends the loop above.
     window.present();
-}
-
-fn apply_position(window: &gtk::ApplicationWindow, pos: Position) {
-    window.set_anchor(Edge::Bottom, true);
-    window.set_margin(Edge::Bottom, pos.bottom);
-    match pos.left {
-        Some(l) => {
-            window.set_anchor(Edge::Left, true);
-            window.set_margin(Edge::Left, l);
-        }
-        None => window.set_anchor(Edge::Left, false),
-    }
-}
-
-/// Logical size of the monitor the bar is on (falls back to 1920x1080).
-fn screen_size(window: &gtk::ApplicationWindow) -> (i32, i32) {
-    let display = gtk::gdk::Display::default();
-    let monitor = display.as_ref().and_then(|d| {
-        window
-            .surface()
-            .and_then(|s| d.monitor_at_surface(&s))
-            .or_else(|| d.monitors().item(0).and_downcast::<gtk::gdk::Monitor>())
-    });
-    monitor.map(|m| (m.geometry().width(), m.geometry().height())).unwrap_or((1920, 1080))
-}
-
-/// Left margin the bar currently has while centred.
-fn centred_left(window: &gtk::ApplicationWindow) -> i32 {
-    ((screen_size(window).0 - window.width()) / 2).max(0)
 }
 
 /// Index of the cue covering `t_ms`, if any (cues are sorted, non-overlapping).
