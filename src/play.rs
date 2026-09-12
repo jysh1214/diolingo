@@ -32,6 +32,8 @@ pub struct PlayOpts<'a> {
     pub mpv_args: &'a [String],
     /// Initial volume in percent; `None` leaves mpv's own default.
     pub volume: Option<u32>,
+    /// Restart the file when it ends.
+    pub loop_file: bool,
     pub dry_run: bool,
 }
 
@@ -53,6 +55,9 @@ pub fn run(opts: &PlayOpts) -> Result<()> {
         .arg(format!("--sub-file={}", bi_srt.display()));
     if let Some(v) = opts.volume {
         cmd.arg(format!("--volume={v}"));
+    }
+    if opts.loop_file {
+        cmd.arg("--loop-file=inf");
     }
     cmd.args(opts.mpv_args).arg(&audio);
     if opts.dry_run {

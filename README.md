@@ -159,7 +159,7 @@ compositor's `PATH` does not include `~/.cargo/bin`).
 Options: `--width N` (bar width, default 1600), `--left N` / `--bottom N`
 (position in pixels; default is the last dragged position, else centred and
 40 px up), `--reset-position` (forget the dragged position), `--font-size N`
-(English size, default 40, Chinese 90% of it), `--volume N`, `--order zh-en`, `--font-en` / `--font-zh` (used as
+(English size, default 40, Chinese 90% of it), `--volume N`, `--no-loop` (stop at the end instead of repeating), `--order zh-en`, `--font-en` / `--font-zh` (used as
 CSS font families), `--mpv-arg=...` forwarded to mpv, `--dry-run` to print
 the mpv command. Requires GTK 4 and gtk4-layer-shell at build time (Arch:
 `gtk4`, `gtk4-layer-shell`) and mpv at run time.

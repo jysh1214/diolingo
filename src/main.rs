@@ -159,6 +159,10 @@ struct PlayArgs {
     #[arg(long)]
     volume: Option<u32>,
 
+    /// Stop at the end instead of looping the file
+    #[arg(long = "no-loop", action = clap::ArgAction::SetFalse)]
+    r#loop: bool,
+
     /// Extra argument for mpv, e.g. --mpv-arg=--volume=70 (repeatable)
     #[arg(long = "mpv-arg", allow_hyphen_values = true)]
     mpv_args: Vec<String>,
@@ -242,6 +246,7 @@ fn main() -> Result<()> {
                 font_zh: &cli.font_zh,
                 mpv_args: &p.mpv_args,
                 volume: p.volume,
+                loop_file: p.r#loop,
                 dry_run: p.dry_run,
             });
         }
