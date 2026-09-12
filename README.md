@@ -8,7 +8,7 @@ your GPU.
 diolingo URL
 ```
 
-produces, in `~/.diolingo/<video id>/`:
+produces, in `~/.diolingo/<video id>-<title>/`:
 
 | File | Content |
 |------|---------|
@@ -19,9 +19,10 @@ produces, in `~/.diolingo/<video id>/`:
 | `<Title> [id].en.srt`, `.zh.srt` | single-language sidecars |
 | `.work/` | info JSON, raw captions, the downloaded video, cached translations |
 
-`--out DIR` moves the whole tree to `DIR/.diolingo/<video id>/`. A re-run
-reuses everything in `.work/`; pass `--clean` to delete it afterwards,
-`--force` to ignore it.
+`--out DIR` moves the whole tree to `DIR/.diolingo/<video id>-<title>/`. A
+re-run finds the folder by its `<video id>-` prefix (so a renamed video still
+lands in the same place) and reuses everything in `.work/`; pass `--clean` to
+delete it afterwards, `--force` to ignore it.
 
 ## Installation
 
@@ -115,7 +116,7 @@ diolingo --en-lang en-orig URL
 
 ## Other options
 
-- `--out DIR`: base directory (default `$HOME`); files go to `DIR/.diolingo/<video id>/`.
+- `--out DIR`: base directory (default `$HOME`); files go to `DIR/.diolingo/<video id>-<title>/`.
 - `--work DIR`: keep downloads and caches in `DIR/<video id>/` instead of the
   video's `.work/`.
 - `--no-video`: only write the subtitle files.

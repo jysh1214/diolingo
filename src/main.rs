@@ -25,11 +25,11 @@ struct Cli {
     #[arg(required = true)]
     urls: Vec<String>,
 
-    /// Base directory: each video's files go to <OUT>/.diolingo/<video id>/ [default: $HOME]
+    /// Base directory: each video's files go to <OUT>/.diolingo/<video id>-<title>/ [default: $HOME]
     #[arg(short, long)]
     out: Option<PathBuf>,
 
-    /// Work directory for downloads and intermediate files [default: <OUT>/.diolingo/<video id>/.work]
+    /// Work directory for downloads and intermediate files [default: <OUT>/.diolingo/<video id>-<title>/.work]
     #[arg(long)]
     work: Option<PathBuf>,
 
@@ -113,21 +113,33 @@ struct Cli {
 /// Where a video's files live. All paths are absolute so ffmpeg can run from
 /// the work directory without relative outputs ending up in the wrong place.
 struct Layout {
-    /// Per-video outputs live in `<out_base>/.diolingo/<id>/`.
+    /// Per-video outputs live in `<out_base>/.diolingo/<id>-<title>/`.
     out_base: PathBuf,
     /// Optional override: work files in `<work_base>/<id>/` instead of `<video dir>/.work/`.
     work_base: Option<PathBuf>,
 }
 
 impl Layout {
-    fn video_dir(&self, id: &str) -> PathBuf {
-        self.out_base.join(".diolingo").join(id)
+    /// `<out_base>/.diolingo/<id>-<sanitized title>/`. An existing directory
+    /// whose name starts with `<id>-` is reused, so a re-run keeps its caches
+    /// even if the video was renamed on YouTube.
+    fn video_dir(&self, id: &str, title: &str) -> PathBuf {
+        let base = self.out_base.join(".diolingo");
+        let prefix = format!("{id}-");
+        if let Ok(entries) = fs::read_dir(&base) {
+            for entry in entries.flatten() {
+                if entry.file_name().to_string_lossy().starts_with(&prefix) && entry.path().is_dir() {
+                    return entry.path();
+                }
+            }
+        }
+        base.join(format!("{prefix}{}", sanitize(title)))
     }
 
-    fn work_dir(&self, id: &str) -> PathBuf {
+    fn work_dir(&self, id: &str, title: &str) -> PathBuf {
         match &self.work_base {
             Some(w) => w.join(id),
-            None => self.video_dir(id).join(".work"),
+            None => self.video_dir(id, title).join(".work"),
         }
     }
 }
@@ -237,8 +249,8 @@ fn process_video(cli: &Cli, layout: &Layout, yt: &YtDlp, agent: &ureq::Agent, tr
         return Ok(());
     }
 
-    let video_dir = layout.video_dir(id);
-    let work = layout.work_dir(id);
+    let video_dir = layout.video_dir(id, &title);
+    let work = layout.work_dir(id, &title);
     if cli.force && work.exists() {
         fs::remove_dir_all(&work).with_context(|| format!("clearing {}", work.display()))?;
     }
