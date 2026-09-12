@@ -39,7 +39,10 @@ pub fn run(opts: &PlayOpts) -> Result<()> {
     cmd.arg("--title=diolingo")
         .arg("--force-window=immediate")
         .arg(format!("--geometry={w}x{h}"))
-        .args(["--ontop", "--border=no", "--keep-open=yes", "--vid=no", "--audio-display=no", "--sub-ass-override=no"])
+        // With no video track mpv places a 16:9 "video" area inside the window and
+        // renders subtitles into it; force-margins makes libass use the whole window.
+        .args(["--ontop", "--border=no", "--keep-open=yes", "--vid=no", "--audio-display=no"])
+        .args(["--sub-ass-override=no", "--sub-ass-force-margins=yes", "--sub-use-margins=yes"])
         .arg(format!("--sub-file={}", ass.display()))
         .args(opts.mpv_args)
         .arg(&audio);
