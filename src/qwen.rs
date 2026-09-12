@@ -1,4 +1,4 @@
-//! Local translation through `scripts/translate_qwen.py` (Qwen on CUDA via transformers).
+//! Local translation through the embedded `translate_qwen.py` (Qwen on CUDA via transformers).
 
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
@@ -7,8 +7,32 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Path of the bundled script, fixed at build time.
-pub const DEFAULT_SCRIPT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/translate_qwen.py");
+/// The translation script and its uv lock file, embedded at build time and
+/// written to a fixed directory on first use (see [`install_script`]).
+const SCRIPT_SRC: &str = include_str!("../scripts/translate_qwen.py");
+const LOCK_SRC: &str = include_str!("../scripts/translate_qwen.py.lock");
+pub const SCRIPT_NAME: &str = "translate_qwen.py";
+
+/// Write the embedded script and lock file into `dir` unless identical copies
+/// are already there. Returns the script path.
+pub fn install_script(dir: &Path) -> Result<PathBuf> {
+    fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    let script = dir.join(SCRIPT_NAME);
+    let lock = dir.join(format!("{SCRIPT_NAME}.lock"));
+    let changed = write_if_changed(&script, SCRIPT_SRC)? | write_if_changed(&lock, LOCK_SRC)?;
+    if changed {
+        eprintln!("[diolingo] installed translation script to {}", script.display());
+    }
+    Ok(script)
+}
+
+fn write_if_changed(path: &Path, content: &str) -> Result<bool> {
+    if fs::read_to_string(path).map(|cur| cur == content).unwrap_or(false) {
+        return Ok(false);
+    }
+    fs::write(path, content).with_context(|| format!("writing {}", path.display()))?;
+    Ok(true)
+}
 
 pub struct Qwen {
     pub script: PathBuf,

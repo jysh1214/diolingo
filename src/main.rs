@@ -25,11 +25,11 @@ struct Cli {
     #[arg(required = true)]
     urls: Vec<String>,
 
-    /// Output directory for the final .mkv and subtitle sidecars
-    #[arg(short, long, default_value = ".")]
-    out: PathBuf,
+    /// Base directory: each video's files go to <OUT>/.diolingo/<video id>/ [default: $HOME]
+    #[arg(short, long)]
+    out: Option<PathBuf>,
 
-    /// Work directory for downloads and intermediate files [default: <out>/.diolingo]
+    /// Work directory for downloads and intermediate files [default: <OUT>/.diolingo/<video id>/.work]
     #[arg(long)]
     work: Option<PathBuf>,
 
@@ -41,7 +41,7 @@ struct Cli {
     #[arg(long)]
     model: Option<String>,
 
-    /// Translation script [default: bundled scripts/translate_qwen.py]
+    /// Translation script [default: ~/.diolingo/.scripts/translate_qwen.py, written out by this binary]
     #[arg(long)]
     script: Option<PathBuf>,
 
@@ -110,9 +110,25 @@ struct Cli {
     clean: bool,
 }
 
-impl Cli {
-    fn work_dir(&self) -> PathBuf {
-        self.work.clone().unwrap_or_else(|| self.out.join(".diolingo"))
+/// Where a video's files live. All paths are absolute so ffmpeg can run from
+/// the work directory without relative outputs ending up in the wrong place.
+struct Layout {
+    /// Per-video outputs live in `<out_base>/.diolingo/<id>/`.
+    out_base: PathBuf,
+    /// Optional override: work files in `<work_base>/<id>/` instead of `<video dir>/.work/`.
+    work_base: Option<PathBuf>,
+}
+
+impl Layout {
+    fn video_dir(&self, id: &str) -> PathBuf {
+        self.out_base.join(".diolingo").join(id)
+    }
+
+    fn work_dir(&self, id: &str) -> PathBuf {
+        match &self.work_base {
+            Some(w) => w.join(id),
+            None => self.video_dir(id).join(".work"),
+        }
     }
 }
 
@@ -138,8 +154,21 @@ fn main() -> Result<()> {
     }
     log(format!("yt-dlp {version}"));
 
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|h| !h.as_os_str().is_empty())
+        .context("HOME is not set")?;
+    let layout = Layout {
+        out_base: std::path::absolute(cli.out.clone().unwrap_or_else(|| home.clone())).context("resolving --out")?,
+        work_base: cli.work.as_ref().map(std::path::absolute).transpose().context("resolving --work")?,
+    };
+    let script = match &cli.script {
+        Some(s) => std::path::absolute(s).context("resolving --script")?,
+        None => qwen::install_script(&home.join(".diolingo").join(".scripts"))?,
+    };
+
     let translator = Qwen {
-        script: cli.script.clone().unwrap_or_else(|| PathBuf::from(qwen::DEFAULT_SCRIPT)),
+        script,
         python: cli.python.clone(),
         model: cli.model.clone(),
         batch_lines: cli.batch,
@@ -156,14 +185,14 @@ fn main() -> Result<()> {
         .build()
         .into();
 
-    fs::create_dir_all(&cli.out).with_context(|| format!("creating {}", cli.out.display()))?;
+    fs::create_dir_all(&layout.out_base).with_context(|| format!("creating {}", layout.out_base.display()))?;
 
     let mut failures = 0usize;
     // Returns true when the video failed; errors are reported, not propagated,
     // so the remaining URLs still get processed.
     let run = |url: &str, info: Info, raw: &str| -> bool {
         let label = format!("{} [{}]", info.title, info.id);
-        match process_video(&cli, &yt, &agent, &translator, url, &info, raw) {
+        match process_video(&cli, &layout, &yt, &agent, &translator, url, &info, raw) {
             Ok(()) => false,
             Err(e) => {
                 eprintln!("[diolingo] ERROR {label}: {e:#}");
@@ -197,7 +226,8 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn process_video(cli: &Cli, yt: &YtDlp, agent: &ureq::Agent, translator: &Qwen, url: &str, info: &Info, raw: &str) -> Result<()> {
+#[allow(clippy::too_many_arguments)]
+fn process_video(cli: &Cli, layout: &Layout, yt: &YtDlp, agent: &ureq::Agent, translator: &Qwen, url: &str, info: &Info, raw: &str) -> Result<()> {
     let id = info.id.as_str();
     let title = if info.title.is_empty() { id.to_string() } else { info.title.clone() };
     log(format!("== {title} [{id}]"));
@@ -207,11 +237,13 @@ fn process_video(cli: &Cli, yt: &YtDlp, agent: &ureq::Agent, translator: &Qwen, 
         return Ok(());
     }
 
-    let work = cli.work_dir().join(id);
+    let video_dir = layout.video_dir(id);
+    let work = layout.work_dir(id);
     if cli.force && work.exists() {
         fs::remove_dir_all(&work).with_context(|| format!("clearing {}", work.display()))?;
     }
     fs::create_dir_all(&work).with_context(|| format!("creating {}", work.display()))?;
+    fs::create_dir_all(&video_dir).with_context(|| format!("creating {}", video_dir.display()))?;
     let info_path = work.join(format!("{id}.info.json"));
     fs::write(&info_path, raw)?;
 
@@ -242,7 +274,7 @@ fn process_video(cli: &Cli, yt: &YtDlp, agent: &ureq::Agent, translator: &Qwen, 
     subs::write_zh_srt(&zh_srt, &bi)?;
 
     let stem = format!("{} [{}]", sanitize(&title), id);
-    let out = |suffix: &str| cli.out.join(format!("{stem}.{suffix}"));
+    let out = |suffix: &str| video_dir.join(format!("{stem}.{suffix}"));
     fs::copy(&bi_srt, out("srt"))?;
     fs::copy(&bi_ass, out("ass"))?;
     fs::copy(&en_srt, out("en.srt"))?;
@@ -269,7 +301,7 @@ fn process_video(cli: &Cli, yt: &YtDlp, agent: &ureq::Agent, translator: &Qwen, 
             let hard = out("hardsub.mkv");
             log("burning styled subtitles into the picture (libx264 re-encode)");
             let ass_name = bi_ass.file_name().and_then(|n| n.to_str()).context("ass file name")?;
-            ffmpeg::burn(&work, &video.canonicalize()?, ass_name, &hard.canonicalize().unwrap_or(hard.clone()))?;
+            ffmpeg::burn(&work, &video, ass_name, &hard)?;
             log(format!("hard-subbed video: {}", hard.display()));
         }
     }

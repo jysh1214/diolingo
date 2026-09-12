@@ -8,7 +8,7 @@ your GPU.
 diolingo URL
 ```
 
-produces, in the current directory:
+produces, in `~/.diolingo/<video id>/`:
 
 | File | Content |
 |------|---------|
@@ -17,16 +17,22 @@ produces, in the current directory:
 | `<Title> [id].srt` | bilingual SRT (English line, then Chinese line) |
 | `<Title> [id].ass` | bilingual ASS with separate `EN` / `ZH` styles (white / pale yellow) |
 | `<Title> [id].en.srt`, `.zh.srt` | single-language sidecars |
+| `.work/` | info JSON, raw captions, the downloaded video, cached translations |
 
-Intermediate files (info JSON, raw captions, the downloaded video, cached
-translations) stay in `<out>/.diolingo/<id>/` so a re-run reuses them. Pass
-`--clean` to delete them, `--force` to ignore them.
+`--out DIR` moves the whole tree to `DIR/.diolingo/<video id>/`. A re-run
+reuses everything in `.work/`; pass `--clean` to delete it afterwards,
+`--force` to ignore it.
 
 ## Installation
 
 ```sh
 cargo install --path .
 ```
+
+The binary is self-contained: the translation script and its uv lock file are
+embedded and written to `~/.diolingo/.scripts/` on first run (and rewritten
+whenever a newer binary carries a different version). The repository does not
+need to stay around after installing.
 
 ## Requirements
 
@@ -42,13 +48,14 @@ cargo install --path .
 ## Qwen translator
 
 `scripts/translate_qwen.py` runs a Qwen model with `transformers` on CUDA.
-`diolingo` invokes it as `uv run --script scripts/translate_qwen.py`; the
-script declares its dependencies in a PEP 723 header (pinned by
-`scripts/translate_qwen.py.lock`), so uv builds and caches the Python
-environment by itself on the first run. Expect that first run to download the
-CUDA build of torch (a few GB) and the model weights (16 GB for Qwen3-8B, into
-`~/.cache/huggingface`). Nothing has to be set up by hand; `--python PATH`
-runs the script with a specific interpreter instead if you want one.
+`diolingo` invokes the copy it wrote to `~/.diolingo/.scripts/` as
+`uv run --script translate_qwen.py`; the script declares its dependencies in a
+PEP 723 header (pinned by `translate_qwen.py.lock` next to it), so uv builds
+and caches the Python environment by itself on the first run. Expect that
+first run to download the CUDA build of torch (a few GB) and the model weights
+(16 GB for Qwen3-8B, into `~/.cache/huggingface`). Nothing has to be set up by
+hand. `--script PATH` runs a different copy of the script (for local edits),
+and `--python PATH` runs it with a specific interpreter instead of uv.
 
 ### Model choice and tuning
 
@@ -108,6 +115,9 @@ diolingo --en-lang en-orig URL
 
 ## Other options
 
+- `--out DIR`: base directory (default `$HOME`); files go to `DIR/.diolingo/<video id>/`.
+- `--work DIR`: keep downloads and caches in `DIR/<video id>/` instead of the
+  video's `.work/`.
 - `--no-video`: only write the subtitle files.
 - `--no-burn`: skip the hard-subbed copy and only produce the MKV with
   switchable subtitle tracks.
