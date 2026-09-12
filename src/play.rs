@@ -12,7 +12,7 @@ use std::process::Command;
 pub struct PlayOpts<'a> {
     /// `<out>/.diolingo`, where the per-video folders live.
     pub base: &'a Path,
-    /// Video id, YouTube URL, part of the title, or a folder path.
+    /// YouTube video id.
     pub target: &'a str,
     pub geometry: (u32, u32),
     pub order: Order,
@@ -56,53 +56,22 @@ pub fn run(opts: &PlayOpts) -> Result<()> {
     Ok(())
 }
 
-/// Find the per-video folder: an existing path, a folder name under `base`, a
-/// `[<id>]` prefix (from a bare id or a YouTube URL), or a case-insensitive
-/// title substring that matches exactly one folder.
-fn resolve_dir(base: &Path, target: &str) -> Result<PathBuf> {
-    let as_path = Path::new(target);
-    if as_path.is_dir() {
-        return std::path::absolute(as_path).context("resolving folder path");
+/// Find the per-video folder `[<id>] <title>` under `base`.
+fn resolve_dir(base: &Path, id: &str) -> Result<PathBuf> {
+    if !is_video_id(id) {
+        bail!("{id:?} is not a YouTube video id (11 characters, e.g. 5C_HPTJg5ek)");
     }
-    if base.join(target).is_dir() {
-        return Ok(base.join(target));
-    }
-    let entries: Vec<PathBuf> = fs::read_dir(base)
+    let prefix = format!("[{id}]");
+    fs::read_dir(base)
         .with_context(|| format!("no videos yet: {} does not exist", base.display()))?
         .flatten()
         .map(|e| e.path())
-        .filter(|p| p.is_dir())
-        .collect();
-    let name_of = |p: &Path| p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    if let Some(id) = youtube_id(target) {
-        let prefix = format!("[{id}]");
-        if let Some(p) = entries.iter().find(|p| name_of(p).starts_with(&prefix)) {
-            return Ok(p.clone());
-        }
-    }
-    let needle = target.to_lowercase();
-    let hits: Vec<&PathBuf> = entries.iter().filter(|p| name_of(p).to_lowercase().contains(&needle)).collect();
-    match hits.len() {
-        0 => bail!("nothing under {} matches {target:?}", base.display()),
-        1 => Ok(hits[0].clone()),
-        _ => bail!(
-            "{target:?} matches several videos, be more specific:\n{}",
-            hits.iter().map(|p| format!("  {}", name_of(p))).collect::<Vec<_>>().join("\n")
-        ),
-    }
+        .find(|p| p.is_dir() && p.file_name().is_some_and(|n| n.to_string_lossy().starts_with(&prefix)))
+        .with_context(|| format!("no folder for video {id} under {}", base.display()))
 }
 
-/// An 11-character YouTube id, taken from a URL (`v=` or `youtu.be/`) or given bare.
-fn youtube_id(target: &str) -> Option<String> {
-    let is_id = |s: &str| s.len() == 11 && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-    let candidate = if let Some(rest) = target.split("v=").nth(1) {
-        rest.split(['&', '#']).next().unwrap_or("")
-    } else if let Some(rest) = target.split("youtu.be/").nth(1) {
-        rest.split(['?', '&', '#']).next().unwrap_or("")
-    } else {
-        target
-    };
-    is_id(candidate).then(|| candidate.to_string())
+fn is_video_id(s: &str) -> bool {
+    s.len() == 11 && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 fn find_file(dir: &Path, suffix: &str) -> Option<PathBuf> {
@@ -147,25 +116,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn extracts_ids() {
-        assert_eq!(youtube_id("5C_HPTJg5ek").as_deref(), Some("5C_HPTJg5ek"));
-        assert_eq!(youtube_id("https://www.youtube.com/watch?v=5C_HPTJg5ek&t=10").as_deref(), Some("5C_HPTJg5ek"));
-        assert_eq!(youtube_id("https://youtu.be/5C_HPTJg5ek?si=x").as_deref(), Some("5C_HPTJg5ek"));
-        assert_eq!(youtube_id("rust"), None);
-    }
-
-    #[test]
-    fn resolves_by_id_then_title() {
+    fn resolves_by_id_only() {
         let base = std::env::temp_dir().join(format!("diolingo-play-test-{}", std::process::id()));
         let a = base.join("[5C_HPTJg5ek] Rust in 100 Seconds");
-        let b = base.join("[abcdefghijk] Rust and Go");
         fs::create_dir_all(&a).unwrap();
-        fs::create_dir_all(&b).unwrap();
         assert_eq!(resolve_dir(&base, "5C_HPTJg5ek").unwrap(), a);
-        assert_eq!(resolve_dir(&base, "100 seconds").unwrap(), a);
-        assert_eq!(resolve_dir(&base, "[abcdefghijk] Rust and Go").unwrap(), b);
-        assert!(resolve_dir(&base, "rust").is_err(), "ambiguous");
-        assert!(resolve_dir(&base, "nope").is_err());
+        assert!(resolve_dir(&base, "abcdefghijk").is_err(), "unknown id");
+        assert!(resolve_dir(&base, "100 seconds").is_err(), "titles are not accepted");
+        assert!(resolve_dir(&base, "https://youtu.be/5C_HPTJg5ek").is_err(), "URLs are not accepted");
         fs::remove_dir_all(&base).unwrap();
     }
 }

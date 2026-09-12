@@ -119,12 +119,11 @@ diolingo --en-lang en-orig URL
 ## Listening with a floating subtitle bar
 
 ```sh
-diolingo play 5C_HPTJg5ek          # by video id
-diolingo play "100 seconds"        # by part of the title
-diolingo play https://youtu.be/... # by URL
+diolingo play 5C_HPTJg5ek
 ```
 
-`play` finds the video's folder under `~/.diolingo/` (or `--out DIR`), writes
+`play` takes the video id (the bracketed part of the folder name), finds the
+folder under `~/.diolingo/` (or `--out DIR`), writes
 a subtitle file sized for the window (`.player.ass`, rebuilt each time from
 the `.en.srt` / `.zh.srt` sidecars), and starts `mpv` on the `.m4a` with a
 borderless, always-on-top window that shows only the bilingual subtitles.

@@ -126,7 +126,7 @@ enum Command {
 
 #[derive(Args, Debug)]
 struct PlayArgs {
-    /// Video id, YouTube URL, part of the title, or the folder path
+    /// YouTube video id (the part in [brackets] of the folder name)
     target: String,
 
     /// Floating window size as WIDTHxHEIGHT
