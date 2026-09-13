@@ -22,7 +22,8 @@ That is enough for `diolingo play` (it reads the two `.srt` sidecars). Revise
 `.zh.srt` if you like, then build the finished files:
 
 ```sh
-diolingo burn ID
+diolingo subs ID   # only the bilingual .srt and .ass
+diolingo burn ID   # those, plus the MKV subtitle tracks and the hard-subbed copy
 ```
 
 | File | Content |
@@ -32,9 +33,9 @@ diolingo burn ID
 | `<Title> [id].mkv` | now with 4 subtitle tracks: styled EN+ZH (default), plain EN+ZH, EN only, ZH only |
 | `<Title> [id].hardsub.mkv` | the video with the styled EN+ZH subtitles burned into the picture (`--soft-only` skips this slow re-encode) |
 
-`burn` is purely local (ffmpeg): no download, no translation. Run it again
-after every edit of `.zh.srt`; it always starts from the clean download in
-`.work/`. `diolingo --burn URL` does both steps in one go.
+`subs` and `burn` are purely local: no download, no translation. Run one of
+them again after every edit of `.zh.srt`; `burn` always starts from the clean
+download in `.work/`. `diolingo --burn URL` does everything in one go.
 
 `--out DIR` moves the whole tree to `DIR/.diolingo/[<video id>] <title>/`. A
 re-run finds the folder by its `[<video id>]` prefix (so a renamed video still

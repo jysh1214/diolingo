@@ -129,8 +129,16 @@ enum Command {
     Ctl(CtlArgs),
     /// List the downloaded videos that `play` can use
     List,
-    /// Build the bilingual .srt/.ass, mux them into the MKV and render the hard-subbed copy from a folder's .en.srt/.zh.srt
+    /// Rebuild the bilingual .srt/.ass from a folder's .en.srt/.zh.srt (after editing the Chinese)
+    Subs(SubsArgs),
+    /// `subs`, then mux the subtitle tracks into the MKV and render the hard-subbed copy
     Burn(BurnArgs),
+}
+
+#[derive(Args, Debug)]
+struct SubsArgs {
+    /// YouTube video id (the part in [brackets] of the folder name)
+    target: String,
 }
 
 #[derive(Args, Debug)]
@@ -243,6 +251,10 @@ fn main() -> Result<()> {
     };
 
     match &cli.command {
+        Some(Command::Subs(a)) => {
+            let dir = play::resolve_dir(&layout.out_base.join(".diolingo"), &a.target)?;
+            return burn::write_bilingual(&dir, &burn_opts(&cli, true));
+        }
         Some(Command::Burn(b)) => {
             let dir = play::resolve_dir(&layout.out_base.join(".diolingo"), &b.target)?;
             return burn::run(&dir, &burn_opts(&cli, b.soft_only));
