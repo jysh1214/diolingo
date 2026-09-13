@@ -42,9 +42,12 @@ pub fn run(opts: &PlayOpts) -> Result<()> {
     let audio = find_file(&dir, ".m4a")
         .or_else(|| find_file(&dir, ".mkv").filter(|p| !p.to_string_lossy().ends_with(".hardsub.mkv")))
         .with_context(|| format!("no .m4a or .mkv in {}", dir.display()))?;
-    let en_srt = find_file(&dir, ".en.srt").with_context(|| format!("no .en.srt in {}", dir.display()))?;
-    let zh_srt = find_file(&dir, ".zh.srt").with_context(|| format!("no .zh.srt in {}", dir.display()))?;
-    let bi_srt = find_bilingual_srt(&dir).with_context(|| format!("no bilingual .srt in {}", dir.display()))?;
+    let en_srt = find_file(&dir, ".en.srt")
+        .with_context(|| format!("no .en.srt in {} (run `diolingo URL` on this video first)", dir.display()))?;
+    let zh_srt = find_file(&dir, ".zh.srt")
+        .with_context(|| format!("no .zh.srt in {} (run `diolingo URL` on this video first)", dir.display()))?;
+    let bi_srt = find_bilingual_srt(&dir)
+        .with_context(|| format!("no bilingual .srt in {} (run `diolingo subs {}` first)", dir.display(), opts.target))?;
     let cues = load_bilingual(&en_srt, &zh_srt)?;
 
     let socket = mpv::socket_path();
