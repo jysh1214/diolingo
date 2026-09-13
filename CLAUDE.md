@@ -19,8 +19,7 @@ this session (no API). Procedure when asked to translate video `<id>`:
    the cue count and timings must stay identical.
 4. Write the result with a script, not by hand: build `<Title> [<id>].zh.srt`
    from the `.en.srt` timings and a list of translations, and assert the
-   counts match. Keep a backup of the previous `.zh.srt` as `.zh.srt.qwen`
-   the first time.
+   counts match. Just overwrite the Qwen draft; no backup.
 5. Do not run `burn` unless asked; `play` picks the new `.zh.srt` up directly.
 6. Report the cue count and anything left in English on purpose.
 
