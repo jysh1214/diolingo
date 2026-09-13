@@ -10,9 +10,10 @@ audio with a subtitle overlay. See README.md for the full command set.
 The owner prefers Claude's translation over the Qwen draft and asks for it in
 this session (no API). Procedure when asked to translate video `<id>`:
 
-1. Read `~/.diolingo/glossary.md` (source in this repo: `glossary.md`) and
-   follow it: terms kept in English, Taiwan-style spoken Traditional Chinese,
-   full-width punctuation, spaces around English/numbers, no notes.
+1. Read this repo's `glossary.md` (a `~/.diolingo/glossary.md`, if present,
+   overrides it) and follow it: terms kept in English, Taiwan-style spoken
+   Traditional Chinese, full-width punctuation, spaces around English/numbers,
+   no notes.
 2. Find the folder `~/.diolingo/[<id>] *` and read `<Title> [<id>].en.srt`
    in full before translating anything, so terminology stays consistent.
 3. Translate every cue one-to-one. Never merge, split or complete fragments;

@@ -12,25 +12,21 @@ use std::process::Command;
 const SCRIPT_SRC: &str = include_str!("../scripts/translate_qwen.py");
 const LOCK_SRC: &str = include_str!("../scripts/translate_qwen.py.lock");
 pub const SCRIPT_NAME: &str = "translate_qwen.py";
-/// The repository's glossary, written to `~/.diolingo/glossary.md` when that
-/// file does not exist yet (never overwritten: the copy there is the one used).
+/// The repository's glossary, embedded like the script.
 const GLOSSARY_SRC: &str = include_str!("../glossary.md");
 pub const GLOSSARY_NAME: &str = "glossary.md";
 
-/// Make sure `<dir>/glossary.md` exists; warn when it differs from the embedded
-/// one so an edited repo copy is not silently ignored.
-pub fn install_glossary(dir: &Path) -> Result<PathBuf> {
-    fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-    let path = dir.join(GLOSSARY_NAME);
-    match fs::read_to_string(&path) {
-        Ok(current) if current == GLOSSARY_SRC => {}
-        Ok(_) => eprintln!("[diolingo] note: {} differs from the glossary built into this binary; copy the repo's glossary.md over it if you meant to update it", path.display()),
-        Err(_) => {
-            fs::write(&path, GLOSSARY_SRC).with_context(|| format!("writing {}", path.display()))?;
-            eprintln!("[diolingo] installed glossary to {}", path.display());
-        }
+/// The glossary to use: `<base>/glossary.md` if the user keeps one there,
+/// otherwise the embedded copy, kept up to date in `<scripts_dir>/glossary.md`.
+pub fn install_glossary(base: &Path, scripts_dir: &Path) -> Result<PathBuf> {
+    let user_copy = base.join(GLOSSARY_NAME);
+    if user_copy.is_file() {
+        return Ok(user_copy);
     }
-    Ok(path)
+    fs::create_dir_all(scripts_dir).with_context(|| format!("creating {}", scripts_dir.display()))?;
+    let managed = scripts_dir.join(GLOSSARY_NAME);
+    write_if_changed(&managed, GLOSSARY_SRC)?;
+    Ok(managed)
 }
 
 /// Write the embedded script and lock file into `dir` unless identical copies

@@ -122,9 +122,9 @@ so re-running with the same settings does not re-translate.
 
 `glossary.md` (terms to keep in English, terms to translate, style rules) is
 appended to the prompt. The repository copy is embedded in the binary and
-written to `~/.diolingo/glossary.md` on first run; that file is the one used,
-so edit the repo copy and copy it over (the binary prints a note when the two
-differ). Changing it invalidates cached translations.
+kept in `~/.diolingo/.scripts/glossary.md`, so editing the repo copy and
+reinstalling is enough. A `~/.diolingo/glossary.md`, if you create one, takes
+precedence. Changing the glossary invalidates cached translations.
 
 Examples:
 

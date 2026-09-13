@@ -289,7 +289,7 @@ fn main() -> Result<()> {
         Some(s) => std::path::absolute(s).context("resolving --script")?,
         None => qwen::install_script(&home.join(".diolingo").join(".scripts"))?,
     };
-    let glossary = qwen::install_glossary(&home.join(".diolingo"))?;
+    let glossary = qwen::install_glossary(&home.join(".diolingo"), &home.join(".diolingo").join(".scripts"))?;
 
     let translator = Qwen {
         script,
