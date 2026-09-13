@@ -1,6 +1,7 @@
 //! diolingo: download a YouTube video and attach bilingual English + Chinese subtitles.
 
 mod align;
+mod burn;
 mod captions;
 mod ffmpeg;
 mod mpv;
@@ -17,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use captions::Cue;
-use subs::{AssStyle, Order};
+use subs::Order;
 use qwen::Qwen;
 use ytdlp::{Info, Track, YtDlp, ZhScript};
 
@@ -87,8 +88,8 @@ struct Cli {
     #[arg(long)]
     no_video: bool,
 
-    /// Skip the hard-subbed copy (<Title> [id].hardsub.mkv, a libx264 re-encode with the styled subtitles burned in)
-    #[arg(long = "no-burn", action = clap::ArgAction::SetFalse)]
+    /// Also run `burn` right away: bilingual .srt/.ass, subtitle tracks in the MKV, hard-subbed copy
+    #[arg(long)]
     burn: bool,
 
     /// Skip the audio-only file (<Title> [id].m4a)
@@ -128,6 +129,18 @@ enum Command {
     Ctl(CtlArgs),
     /// List the downloaded videos that `play` can use
     List,
+    /// Build the bilingual .srt/.ass, mux them into the MKV and render the hard-subbed copy from a folder's .en.srt/.zh.srt
+    Burn(BurnArgs),
+}
+
+#[derive(Args, Debug)]
+struct BurnArgs {
+    /// YouTube video id (the part in [brackets] of the folder name)
+    target: String,
+
+    /// Only the sidecars and the soft subtitle tracks; skip the slow re-encode
+    #[arg(long)]
+    soft_only: bool,
 }
 
 #[derive(Args, Debug)]
@@ -230,6 +243,10 @@ fn main() -> Result<()> {
     };
 
     match &cli.command {
+        Some(Command::Burn(b)) => {
+            let dir = play::resolve_dir(&layout.out_base.join(".diolingo"), &b.target)?;
+            return burn::run(&dir, &burn_opts(&cli, b.soft_only));
+        }
         Some(Command::List) => return play::list(&layout.out_base.join(".diolingo")),
         Some(Command::Ctl(c)) => return play::ctl(&c.words),
         Some(Command::Play(p)) => {
@@ -371,55 +388,57 @@ fn process_video(cli: &Cli, layout: &Layout, yt: &YtDlp, agent: &ureq::Agent, tr
     let with_zh = bi.iter().filter(|c| !c.zh.is_empty()).count();
     log(format!("bilingual: {} cues, {with_zh} with Chinese", bi.len()));
 
-    // Subtitle files (work dir, id-based names) then copies with the title.
-    let w = |suffix: &str| work.join(format!("{id}.{suffix}"));
-    let (bi_srt, bi_ass, en_srt, zh_srt) = (w("bi.srt"), w("bi.ass"), w("en.srt"), w(&format!("{}.srt", cli.zh.tag())));
-    subs::write_bilingual_srt(&bi_srt, &bi, cli.order)?;
-    subs::write_ass(&bi_ass, &bi, cli.order, &AssStyle::video(&cli.font_en, &cli.font_zh))?;
-    subs::write_srt(&en_srt, &en_cues)?;
-    subs::write_zh_srt(&zh_srt, &bi)?;
-
+    // Sidecars: the English track and the Qwen draft. Everything else
+    // (bilingual .srt/.ass, subtitle tracks, hard-sub) is `burn`'s job, so the
+    // Chinese can be revised first.
     let stem = format!("{} [{}]", sanitize(&title), id);
     let out = |suffix: &str| video_dir.join(format!("{stem}.{suffix}"));
-    fs::copy(&bi_srt, out("srt"))?;
-    fs::copy(&bi_ass, out("ass"))?;
-    fs::copy(&en_srt, out("en.srt"))?;
-    fs::copy(&zh_srt, out("zh.srt"))?;
-    log(format!("subtitles: {}", out("srt").display()));
+    subs::write_srt(&out("en.srt"), &en_cues)?;
+    subs::write_zh_srt(&out("zh.srt"), &bi)?;
+    log(format!("subtitles: {}", out("zh.srt").display()));
 
     if !cli.no_video {
         let video = yt.download_video(url, &info_path, &work, id, cli.max_height)?;
-        let zh_title = match cli.zh {
-            ZhScript::ZhHant => "中文（繁體）",
-            ZhScript::ZhHans => "中文（简体）",
-        };
-        let tracks = [
-            ffmpeg::SubTrack { path: &bi_ass, lang: "mul", title: "English + 中文 (styled)", default: true },
-            ffmpeg::SubTrack { path: &bi_srt, lang: "mul", title: "English + 中文", default: false },
-            ffmpeg::SubTrack { path: &en_srt, lang: "eng", title: "English", default: false },
-            ffmpeg::SubTrack { path: &zh_srt, lang: "chi", title: zh_title, default: false },
-        ];
         let mkv = out("mkv");
-        log("muxing subtitle tracks into MKV");
-        ffmpeg::mux(&video, &tracks, &mkv)?;
-        log(format!("video: {}", mkv.display()));
+        if !mkv.exists() {
+            link_or_copy(&video, &mkv)?;
+            log(format!("video: {}", mkv.display()));
+        }
         if cli.audio {
             let m4a = out("m4a");
             ffmpeg::extract_audio(&video, &m4a)?;
             log(format!("audio: {}", m4a.display()));
         }
         if cli.burn {
-            let hard = out("hardsub.mkv");
-            log("burning styled subtitles into the picture (libx264 re-encode)");
-            let ass_name = bi_ass.file_name().and_then(|n| n.to_str()).context("ass file name")?;
-            ffmpeg::burn(&work, &video, ass_name, &hard)?;
-            log(format!("hard-subbed video: {}", hard.display()));
+            burn::run(&video_dir, &burn_opts(cli, false))?;
         }
     }
 
     if cli.clean {
         fs::remove_dir_all(&work).with_context(|| format!("removing {}", work.display()))?;
     }
+    Ok(())
+}
+
+fn burn_opts(cli: &Cli, soft_only: bool) -> burn::BurnOpts<'_> {
+    burn::BurnOpts {
+        order: cli.order,
+        font_en: &cli.font_en,
+        font_zh: &cli.font_zh,
+        zh_title: match cli.zh {
+            ZhScript::ZhHant => "中文（繁體）",
+            ZhScript::ZhHans => "中文（简体）",
+        },
+        soft_only,
+    }
+}
+
+/// Hard-link `src` as `dst` (free on the same file system), copying if that fails.
+fn link_or_copy(src: &Path, dst: &Path) -> Result<()> {
+    if fs::hard_link(src, dst).is_ok() {
+        return Ok(());
+    }
+    fs::copy(src, dst).with_context(|| format!("copying {} to {}", src.display(), dst.display()))?;
     Ok(())
 }
 

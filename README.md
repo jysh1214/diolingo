@@ -8,17 +8,33 @@ your GPU.
 diolingo URL
 ```
 
-produces, in `~/.diolingo/[<video id>] <title>/`:
+fetches the material into `~/.diolingo/[<video id>] <title>/`:
 
 | File | Content |
 |------|---------|
-| `<Title> [id].mkv` | video + 4 subtitle tracks: styled EN+ZH (default), plain EN+ZH, EN only, ZH only |
-| `<Title> [id].hardsub.mkv` | the same video with the styled EN+ZH subtitles burned into the picture (`--no-burn` skips it) |
+| `<Title> [id].mkv` | the downloaded video, untouched (a hard link into `.work/`) |
 | `<Title> [id].m4a` | audio only, for listening practice (`--no-audio` skips it) |
+| `<Title> [id].en.srt` | the English track |
+| `<Title> [id].zh.srt` | the Chinese draft from the local Qwen model |
+| `.work/` | info JSON, raw captions, the downloaded video, cached translations |
+
+That is enough for `diolingo play` (it reads the two `.srt` sidecars). Revise
+`.zh.srt` if you like, then build the finished files:
+
+```sh
+diolingo burn ID
+```
+
+| File | Content |
+|------|---------|
 | `<Title> [id].srt` | bilingual SRT (English line, then Chinese line) |
 | `<Title> [id].ass` | bilingual ASS with separate `EN` / `ZH` styles (white / pale yellow) |
-| `<Title> [id].en.srt`, `.zh.srt` | single-language sidecars |
-| `.work/` | info JSON, raw captions, the downloaded video, cached translations |
+| `<Title> [id].mkv` | now with 4 subtitle tracks: styled EN+ZH (default), plain EN+ZH, EN only, ZH only |
+| `<Title> [id].hardsub.mkv` | the video with the styled EN+ZH subtitles burned into the picture (`--soft-only` skips this slow re-encode) |
+
+`burn` is purely local (ffmpeg): no download, no translation. Run it again
+after every edit of `.zh.srt`; it always starts from the clean download in
+`.work/`. `diolingo --burn URL` does both steps in one go.
 
 `--out DIR` moves the whole tree to `DIR/.diolingo/[<video id>] <title>/`. A
 re-run finds the folder by its `[<video id>]` prefix (so a renamed video still
@@ -170,8 +186,8 @@ the mpv command. Requires GTK 4 and gtk4-layer-shell at build time (Arch:
 - `--work DIR`: keep downloads and caches in `DIR/<video id>/` instead of the
   video's `.work/`.
 - `--no-video`: only write the subtitle files.
-- `--no-burn`: skip the hard-subbed copy and only produce the MKV with
-  switchable subtitle tracks.
+- `--burn`: run `burn` right after fetching (bilingual `.srt`/`.ass`, subtitle
+  tracks in the MKV, hard-subbed copy).
 - `--no-audio`: skip the audio-only `.m4a` (stream-copied when YouTube's track
   is AAC, otherwise transcoded to AAC).
 - `--order zh-en`: Chinese line on top.

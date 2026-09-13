@@ -164,6 +164,12 @@ pub fn list(base: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The video id of a `[<id>] <title>` folder.
+pub(crate) fn folder_id(dir: &Path) -> Option<String> {
+    let name = dir.file_name()?.to_str()?;
+    parse_folder_name(name).map(|(id, _)| id.to_string())
+}
+
 /// Split `[<id>] <title>` into its parts.
 fn parse_folder_name(name: &str) -> Option<(&str, &str)> {
     let rest = name.strip_prefix('[')?;
@@ -216,7 +222,7 @@ fn wait_for_socket(socket: &Path, child: &mut std::process::Child) -> Result<()>
 }
 
 /// Find the per-video folder `[<id>] <title>` under `base`.
-fn resolve_dir(base: &Path, id: &str) -> Result<PathBuf> {
+pub(crate) fn resolve_dir(base: &Path, id: &str) -> Result<PathBuf> {
     if !is_video_id(id) {
         bail!("{id:?} is not a YouTube video id (11 characters, e.g. 5C_HPTJg5ek)");
     }
@@ -233,7 +239,7 @@ fn is_video_id(s: &str) -> bool {
     s.len() == 11 && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
-fn find_file(dir: &Path, suffix: &str) -> Option<PathBuf> {
+pub(crate) fn find_file(dir: &Path, suffix: &str) -> Option<PathBuf> {
     let mut hits: Vec<PathBuf> = fs::read_dir(dir)
         .ok()?
         .flatten()
@@ -261,7 +267,7 @@ fn find_bilingual_srt(dir: &Path) -> Option<PathBuf> {
 
 /// Rebuild bilingual cues from the two single-language sidecars, which share
 /// their timings; a cue with no Chinese line is kept with an empty `zh`.
-fn load_bilingual(en_srt: &Path, zh_srt: &Path) -> Result<Vec<BiCue>> {
+pub(crate) fn load_bilingual(en_srt: &Path, zh_srt: &Path) -> Result<Vec<BiCue>> {
     let en = captions::parse_srt(&fs::read_to_string(en_srt)?).with_context(|| format!("parsing {}", en_srt.display()))?;
     let zh = captions::parse_srt(&fs::read_to_string(zh_srt)?).with_context(|| format!("parsing {}", zh_srt.display()))?;
     let zh_by_start: HashMap<u64, String> = zh.into_iter().map(|c| (c.start_ms, c.text)).collect();
