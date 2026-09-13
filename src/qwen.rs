@@ -12,6 +12,26 @@ use std::process::Command;
 const SCRIPT_SRC: &str = include_str!("../scripts/translate_qwen.py");
 const LOCK_SRC: &str = include_str!("../scripts/translate_qwen.py.lock");
 pub const SCRIPT_NAME: &str = "translate_qwen.py";
+/// The repository's glossary, written to `~/.diolingo/glossary.md` when that
+/// file does not exist yet (never overwritten: the copy there is the one used).
+const GLOSSARY_SRC: &str = include_str!("../glossary.md");
+pub const GLOSSARY_NAME: &str = "glossary.md";
+
+/// Make sure `<dir>/glossary.md` exists; warn when it differs from the embedded
+/// one so an edited repo copy is not silently ignored.
+pub fn install_glossary(dir: &Path) -> Result<PathBuf> {
+    fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    let path = dir.join(GLOSSARY_NAME);
+    match fs::read_to_string(&path) {
+        Ok(current) if current == GLOSSARY_SRC => {}
+        Ok(_) => eprintln!("[diolingo] note: {} differs from the glossary built into this binary; copy the repo's glossary.md over it if you meant to update it", path.display()),
+        Err(_) => {
+            fs::write(&path, GLOSSARY_SRC).with_context(|| format!("writing {}", path.display()))?;
+            eprintln!("[diolingo] installed glossary to {}", path.display());
+        }
+    }
+    Ok(path)
+}
 
 /// Write the embedded script and lock file into `dir` unless identical copies
 /// are already there. Returns the script path.
@@ -36,6 +56,8 @@ fn write_if_changed(path: &Path, content: &str) -> Result<bool> {
 
 pub struct Qwen {
     pub script: PathBuf,
+    /// Glossary / style rules passed to the script, if the file exists.
+    pub glossary: Option<PathBuf>,
     /// Interpreter to run the script with; `None` means `uv run --script`.
     pub python: Option<PathBuf>,
     /// Model id passed through to the script; `None` keeps the script's default.
@@ -84,8 +106,12 @@ impl Qwen {
         self.model.hash(&mut h);
         self.extra_args.hash(&mut h);
         self.batch_lines.hash(&mut h);
-        // The script's own text is part of the key so prompt changes invalidate old results.
+        // The script's own text and the glossary are part of the key so prompt
+        // changes invalidate old results.
         fs::read(&self.script).with_context(|| format!("reading {}", self.script.display()))?.hash(&mut h);
+        if let Some(g) = &self.glossary {
+            fs::read(g).with_context(|| format!("reading {}", g.display()))?.hash(&mut h);
+        }
         input_text.hash(&mut h);
         let key = format!("{:016x}", h.finish());
         let in_path = work.join(format!("{id}.qwen.{key}.in.json"));
@@ -109,6 +135,9 @@ impl Qwen {
             cmd.arg("--batch-lines").arg(self.batch_lines.to_string());
             if let Some(m) = &self.model {
                 cmd.arg("--model").arg(m);
+            }
+            if let Some(g) = &self.glossary {
+                cmd.arg("--glossary").arg(g);
             }
             cmd.args(&self.extra_args);
             let status = cmd.status().context("running the translation script")?;

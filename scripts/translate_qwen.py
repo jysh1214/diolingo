@@ -60,16 +60,19 @@ def log(msg: str) -> None:
     print(f"[qwen] {msg}", file=sys.stderr, flush=True)
 
 
-def system_prompt(target: str) -> str:
+def system_prompt(target: str, glossary: str = "") -> str:
     simplified = "Simplified" in target or "简体" in target
     if simplified:
         ex = ("大家好，欢迎回到", "频道，今天我们要来看", "[音乐]")
     else:
         ex = ("大家好，歡迎回到", "頻道，今天我們要來看", "[音樂]")
-    return SYSTEM_PROMPT.format(target=target, ex1=ex[0], ex2=ex[1], ex3=ex[2])
+    prompt = SYSTEM_PROMPT.format(target=target, ex1=ex[0], ex2=ex[1], ex3=ex[2])
+    if glossary.strip():
+        prompt += "\n\nGlossary and style rules. Follow them strictly; they override the rules above where they differ:\n\n" + glossary.strip()
+    return prompt
 
 
-def build_messages(chunk: list[str], context: list[str], title: str, target: str) -> list[dict]:
+def build_messages(chunk: list[str], context: list[str], title: str, target: str, glossary: str = "") -> list[dict]:
     user = f"Video title: {title}\n\n"
     if context:
         user += "Preceding lines (context only, do not output):\n"
@@ -77,7 +80,7 @@ def build_messages(chunk: list[str], context: list[str], title: str, target: str
     user += "Translate these lines:\n"
     user += "".join(f"{i + 1}\t{line.replace(chr(10), ' ')}\n" for i, line in enumerate(chunk))
     return [
-        {"role": "system", "content": system_prompt(target)},
+        {"role": "system", "content": system_prompt(target, glossary)},
         {"role": "user", "content": user},
     ]
 
@@ -199,13 +202,13 @@ def chunked(seq: list, size: int) -> list[list]:
 
 
 def translate(gen, lines: list[str], title: str, target: str, batch_lines: int, batch_prompts: int,
-              tokens_per_line: int, debug: bool = False) -> list[str]:
+              tokens_per_line: int, debug: bool = False, glossary: str = "") -> list[str]:
     result: list[str | None] = [None] * len(lines)
     chunks = [(start, lines[start:start + batch_lines]) for start in range(0, len(lines), batch_lines)]
     t0 = time.time()
     done = 0
     for group in chunked(chunks, batch_prompts):
-        batches = [build_messages(chunk, lines[max(0, s - 3):s], title, target) for s, chunk in group]
+        batches = [build_messages(chunk, lines[max(0, s - 3):s], title, target, glossary) for s, chunk in group]
         longest = max(len(c) for _, c in group)
         replies = gen.generate(batches, min(4096, tokens_per_line * longest + 32))
         for (start, chunk), reply in zip(group, replies):
@@ -220,7 +223,7 @@ def translate(gen, lines: list[str], title: str, target: str, batch_lines: int, 
     if missing:
         log(f"{len(missing)} line(s) rejected or missing from batch output; retrying them one by one")
         for group in chunked(missing, batch_prompts):
-            batches = [build_messages([lines[i]], lines[max(0, i - 3):i], title, target) for i in group]
+            batches = [build_messages([lines[i]], lines[max(0, i - 3):i], title, target, glossary) for i in group]
             replies = gen.generate(batches, min(4096, tokens_per_line + 32))
             for i, reply in zip(group, replies):
                 if debug:
@@ -246,6 +249,7 @@ def main() -> None:
     ap.add_argument("--tokens-per-line", type=int, default=80, help="generation budget per subtitle line (echo + translation)")
     ap.add_argument("--mock", action="store_true", help="skip the model and echo the input (plumbing test)")
     ap.add_argument("--debug", action="store_true", help="print raw model replies to stderr")
+    ap.add_argument("--glossary", help="text file with terms to keep/translate and style rules, appended to the prompt")
     args = ap.parse_args()
 
     src = open(args.input, encoding="utf-8") if args.input else sys.stdin
@@ -255,9 +259,12 @@ def main() -> None:
     title: str = payload.get("title", "")
     target: str = payload.get("target", "Traditional Chinese as used in Taiwan (台灣繁體中文，使用台灣慣用語)")
 
+    glossary = open(args.glossary, encoding="utf-8").read() if args.glossary else ""
+    if glossary.strip():
+        log(f"using glossary {args.glossary}")
     gen = MockGenerator() if args.mock else HfGenerator(args.model, args.device, args.dtype, args.quant)
     translations = translate(gen, lines, title, target, max(1, args.batch_lines), max(1, args.batch_prompts),
-                             args.tokens_per_line, args.debug)
+                             args.tokens_per_line, args.debug, glossary)
     out = {"model": "mock" if args.mock else args.model, "translations": translations}
     if args.output:
         with open(args.output, "w", encoding="utf-8") as f:

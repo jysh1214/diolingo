@@ -120,6 +120,12 @@ so re-running with the same settings does not re-translate.
 `--zh zh-hant` (default) asks for Traditional Chinese with Taiwan usage;
 `--zh zh-hans` asks for Simplified.
 
+`glossary.md` (terms to keep in English, terms to translate, style rules) is
+appended to the prompt. The repository copy is embedded in the binary and
+written to `~/.diolingo/glossary.md` on first run; that file is the one used,
+so edit the repo copy and copy it over (the binary prints a note when the two
+differ). Changing it invalidates cached translations.
+
 Examples:
 
 ```sh

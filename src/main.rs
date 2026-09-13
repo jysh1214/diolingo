@@ -289,9 +289,11 @@ fn main() -> Result<()> {
         Some(s) => std::path::absolute(s).context("resolving --script")?,
         None => qwen::install_script(&home.join(".diolingo").join(".scripts"))?,
     };
+    let glossary = qwen::install_glossary(&home.join(".diolingo"))?;
 
     let translator = Qwen {
         script,
+        glossary: glossary.is_file().then_some(glossary),
         python: cli.python.clone(),
         model: cli.model.clone(),
         batch_lines: cli.batch,
