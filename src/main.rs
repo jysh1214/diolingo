@@ -138,12 +138,14 @@ enum Command {
 #[derive(Args, Debug)]
 struct SubsArgs {
     /// YouTube video id (the part in [brackets] of the folder name)
+    #[arg(allow_hyphen_values = true)]
     target: String,
 }
 
 #[derive(Args, Debug)]
 struct BurnArgs {
     /// YouTube video id (the part in [brackets] of the folder name)
+    #[arg(allow_hyphen_values = true)]
     target: String,
 
     /// Only the sidecars and the soft subtitle tracks; skip the slow re-encode
@@ -154,6 +156,7 @@ struct BurnArgs {
 #[derive(Args, Debug)]
 struct PlayArgs {
     /// YouTube video id (the part in [brackets] of the folder name)
+    #[arg(allow_hyphen_values = true)]
     target: String,
 
     /// Width of the subtitle bar in pixels (it is centred at the bottom of the screen)
