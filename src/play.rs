@@ -4,7 +4,7 @@
 use crate::align::BiCue;
 use crate::captions;
 use crate::mpv;
-use crate::overlay::{self, OverlayOpts, Position};
+use crate::overlay::{self, OverlayOpts, Position, ShadowOpts};
 use crate::subs::Order;
 use anyhow::{Context, Result, bail};
 use serde_json::json;
@@ -34,6 +34,8 @@ pub struct PlayOpts<'a> {
     pub volume: Option<u32>,
     /// Restart the file when it ends.
     pub loop_file: bool,
+    /// Pause after every sentence for repeating (ratio, max sentence length in ms).
+    pub shadow: Option<ShadowOpts>,
     pub dry_run: bool,
 }
 
@@ -94,6 +96,7 @@ pub fn run(opts: &PlayOpts) -> Result<()> {
             font_size: opts.font_size,
             position,
             position_file,
+            shadow: opts.shadow,
             font_en: opts.font_en.to_string(),
             font_zh: opts.font_zh.to_string(),
             order: opts.order,

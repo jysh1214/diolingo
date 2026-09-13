@@ -184,6 +184,18 @@ struct PlayArgs {
     #[arg(long = "no-loop", action = clap::ArgAction::SetFalse)]
     r#loop: bool,
 
+    /// Shadowing: pause after every sentence long enough to repeat it (click the bar or `ctl cycle pause` to go on early)
+    #[arg(long)]
+    shadow: bool,
+
+    /// Pause length as a multiple of the sentence's own duration (plus 0.5 s, clamped to 1.5-12 s)
+    #[arg(long, default_value_t = 1.0)]
+    shadow_ratio: f64,
+
+    /// Longest sentence to build from consecutive cues, in seconds, when there is no punctuation or gap
+    #[arg(long, default_value_t = 6.0)]
+    shadow_chunk: f64,
+
     /// Extra argument for mpv, e.g. --mpv-arg=--volume=70 (repeatable)
     #[arg(long = "mpv-arg", allow_hyphen_values = true)]
     mpv_args: Vec<String>,
@@ -276,6 +288,10 @@ fn main() -> Result<()> {
                 mpv_args: &p.mpv_args,
                 volume: p.volume,
                 loop_file: p.r#loop,
+                shadow: p.shadow.then_some(overlay::ShadowOpts {
+                    ratio: p.shadow_ratio.max(0.1),
+                    chunk_ms: (p.shadow_chunk.max(1.0) * 1000.0) as u64,
+                }),
                 dry_run: p.dry_run,
             });
         }

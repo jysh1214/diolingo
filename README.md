@@ -179,6 +179,15 @@ Bind them to global keys in your compositor so they work while a game or
 another window has focus (use the installed binary's absolute path if the
 compositor's `PATH` does not include `~/.cargo/bin`).
 
+Shadowing practice: `diolingo play ID --shadow` pauses after every sentence
+for about as long as the sentence took (`--shadow-ratio 1.3` for 30% longer;
+always at least 1.5 s and at most 12 s), keeps the whole sentence on the bar
+with a countdown, then resumes. Sentences are consecutive cues up to a full
+stop, a pause of 0.7 s in the speech, or `--shadow-chunk` seconds (default 6,
+which is what auto captions without punctuation fall back to). Click the bar
+or `diolingo ctl cycle pause` to go on early; `diolingo ctl sub-seek -1`
+replays the sentence, and seeking back re-arms the pause for it.
+
 Options: `--width N` (bar width, default 1600), `--left N` / `--bottom N`
 (position in pixels; default is the last dragged position, else centred and
 40 px up), `--reset-position` (forget the dragged position), `--font-size N`

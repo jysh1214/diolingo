@@ -6,7 +6,7 @@
 //! click-through. The bar follows mpv's `time-pos` over IPC; the wheel changes
 //! the volume, a click toggles pause. It never takes keyboard focus.
 
-use crate::align::BiCue;
+use crate::align::{self, BiCue};
 use crate::mpv;
 use crate::subs::Order;
 use anyhow::{Context, Result};
@@ -35,6 +35,70 @@ pub struct OverlayOpts {
     pub position: Position,
     /// File the position is saved to after a drag.
     pub position_file: PathBuf,
+    /// Shadowing: pause after every sentence so it can be repeated.
+    pub shadow: Option<ShadowOpts>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ShadowOpts {
+    /// Pause length as a multiple of the sentence's own duration.
+    pub ratio: f64,
+    /// Longest sentence to build from consecutive cues, in ms.
+    pub chunk_ms: u64,
+}
+
+/// A sentence: consecutive cues `first..=last`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Chunk {
+    first: usize,
+    last: usize,
+    start_ms: u64,
+    end_ms: u64,
+}
+
+/// Group cues into sentences: a chunk ends at terminal punctuation, before a
+/// gap of `GAP_MS` or more, or once it is `max_ms` long.
+fn chunk_cues(cues: &[BiCue], max_ms: u64) -> Vec<Chunk> {
+    const GAP_MS: u64 = 700;
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < cues.len() {
+        let first = i;
+        let start_ms = cues[i].start_ms;
+        loop {
+            let c = &cues[i];
+            let text = c.en.trim_end().trim_end_matches(['"', '\'', ')', ']', '”', '』', '」']);
+            let sentence_end = text.ends_with(['.', '?', '!', '。', '？', '！']);
+            let last = i + 1 >= cues.len()
+                || sentence_end
+                || cues[i + 1].start_ms.saturating_sub(c.end_ms) >= GAP_MS
+                || c.end_ms.saturating_sub(start_ms) >= max_ms;
+            if last {
+                break;
+            }
+            i += 1;
+        }
+        out.push(Chunk { first, last: i, start_ms, end_ms: cues[i].end_ms });
+        i += 1;
+    }
+    out
+}
+
+fn chunk_at(chunks: &[Chunk], t_ms: u64) -> Option<usize> {
+    let i = chunks.partition_point(|c| c.start_ms <= t_ms).checked_sub(1)?;
+    (t_ms < chunks[i].end_ms).then_some(i)
+}
+
+/// How long to pause after a sentence of `len_ms`.
+fn shadow_pause(len_ms: u64, ratio: f64) -> Duration {
+    let secs = (len_ms as f64 / 1000.0 * ratio + 0.5).clamp(1.5, 12.0);
+    Duration::from_secs_f64(secs)
+}
+
+fn set_pause(control: &Arc<Mutex<UnixStream>>, paused: bool) {
+    if let Ok(mut s) = control.lock() {
+        let _ = mpv::send(&mut s, &json!({ "command": ["set_property", "pause", paused] }));
+    }
 }
 
 /// Bar position in screen pixels: distance from the left edge (`None` keeps
@@ -324,7 +388,16 @@ fn build_ui(app: &gtk::Application, cues: Rc<Vec<BiCue>>, opts: Rc<OverlayOpts>,
 
     // Refresh from the mirrored player state; quit when mpv is gone.
     let app_ref = app.clone();
-    let mut last: Option<(usize, bool, String)> = None;
+    let shadow_opts = opts.shadow;
+    let chunks = shadow_opts.map(|o| chunk_cues(&cues, o.chunk_ms)).unwrap_or_default();
+    let control_ref = control.clone();
+    let mut last: Option<(String, String, String)> = None;
+    // Shadowing state: the sentence the playhead was last inside, the one we
+    // already paused for, and the pause in progress (sentence, deadline,
+    // whether mpv has confirmed the pause).
+    let mut seen_chunk: Option<usize> = None;
+    let mut shadowed: Option<usize> = None;
+    let mut pausing: Option<(usize, Instant, bool)> = None;
     glib::timeout_add_local(Duration::from_millis(40), move || {
         let (time_ms, paused, volume, show_volume, alive) = {
             let s = shared.lock().unwrap();
@@ -334,30 +407,77 @@ fn build_ui(app: &gtk::Application, cues: Rc<Vec<BiCue>>, opts: Rc<OverlayOpts>,
             app_ref.quit();
             return glib::ControlFlow::Break;
         }
-        let idx = time_ms.and_then(|t| current_cue(&cues, t));
-        let status_text = match (paused, show_volume, volume) {
-            (true, _, _) => "⏸ paused".to_string(),
-            (false, true, Some(v)) => format!("volume {:.0}%", v),
-            _ => String::new(),
-        };
-        let key = (idx.unwrap_or(usize::MAX), paused, status_text.clone());
-        if last.as_ref() != Some(&key) {
-            last = Some(key);
-            match idx {
-                Some(i) => {
-                    en.set_text(&cues[i].en);
-                    zh.set_text(&cues[i].zh);
-                    en.set_visible(!cues[i].en.is_empty());
-                    zh.set_visible(!cues[i].zh.is_empty());
+
+        // Shadowing: pause at the end of each sentence, resume after the countdown.
+        let mut shadow_text: Option<(String, String, String)> = None;
+        if let (Some(o), Some(t)) = (shadow_opts, time_ms) {
+            if let Some((k, until, confirmed)) = pausing {
+                let now = Instant::now();
+                let confirmed = confirmed || paused;
+                if confirmed && (!paused || now >= until) {
+                    // Countdown over, or the listener resumed early.
+                    if paused {
+                        set_pause(&control_ref, false);
+                    }
+                    pausing = None;
+                    shadowed = Some(k);
+                } else {
+                    pausing = Some((k, until, confirmed));
+                    let c = &chunks[k];
+                    let en_all = cues[c.first..=c.last].iter().map(|x| x.en.replace('\n', " ")).collect::<Vec<_>>().join(" ");
+                    let zh_all = align::flatten_zh(&cues[c.first..=c.last].iter().map(|x| x.zh.as_str()).collect::<Vec<_>>().join("\n"));
+                    let left = until.saturating_duration_since(now).as_secs_f64();
+                    shadow_text = Some((en_all, zh_all, format!("repeat  {left:.1} s")));
                 }
-                None => {
-                    en.set_visible(false);
-                    zh.set_visible(false);
+            } else {
+                let cur = chunk_at(&chunks, t);
+                if let Some(k) = shadowed
+                    && t < chunks[k].start_ms
+                {
+                    shadowed = None; // seeked back: this sentence may be practised again
+                }
+                if let Some(k) = seen_chunk
+                    && shadowed != Some(k)
+                    && !paused
+                    && t + 30 >= chunks[k].end_ms
+                    && t < chunks[k].end_ms + 500
+                {
+                    set_pause(&control_ref, true);
+                    let c = &chunks[k];
+                    pausing = Some((k, Instant::now() + shadow_pause(c.end_ms - c.start_ms, o.ratio), false));
+                }
+                if cur.is_some() {
+                    seen_chunk = cur;
                 }
             }
-            status.set_text(&status_text);
+        }
+
+        let idx = time_ms.and_then(|t| current_cue(&cues, t));
+        let (en_text, zh_text, status_text) = match shadow_text {
+            Some(t) => t,
+            None => {
+                let status_text = match (paused, show_volume, volume) {
+                    (true, _, _) => "⏸ paused".to_string(),
+                    (false, true, Some(v)) => format!("volume {:.0}%", v),
+                    _ => String::new(),
+                };
+                match idx {
+                    Some(i) => (cues[i].en.clone(), cues[i].zh.clone(), status_text),
+                    None => (String::new(), String::new(), status_text),
+                }
+            }
+        };
+        let key = (en_text, zh_text, status_text);
+        if last.as_ref() != Some(&key) {
+            let (en_text, zh_text, status_text) = &key;
+            en.set_text(en_text);
+            zh.set_text(zh_text);
+            en.set_visible(!en_text.is_empty());
+            zh.set_visible(!zh_text.is_empty());
+            status.set_text(status_text);
             status.set_visible(!status_text.is_empty());
-            bar.set_visible(idx.is_some() || !status_text.is_empty());
+            bar.set_visible(!en_text.is_empty() || !zh_text.is_empty() || !status_text.is_empty());
+            last = Some(key);
         }
         layout.place(position.get(), bar.is_visible());
         glib::ControlFlow::Continue
@@ -400,6 +520,27 @@ mod tests {
         assert_eq!(Position::load(&path), Some(Position::DEFAULT));
         fs::remove_file(&path).unwrap();
         assert_eq!(Position::load(&path), None);
+    }
+
+    #[test]
+    fn chunks_follow_punctuation_gaps_and_length() {
+        let c = |s: u64, e: u64, en: &str| BiCue { start_ms: s, end_ms: e, en: en.into(), zh: String::new() };
+        let cues = vec![
+            c(0, 1000, "hello there"),
+            c(1000, 2000, "how are you?"),   // sentence end
+            c(2000, 3000, "fine"),
+            c(4000, 5000, "and you"),        // gap of 1000 before this one
+            c(5000, 9000, "a very long one"),
+            c(9000, 10000, "continues"),     // previous chunk hit the 5 s cap at 9000
+        ];
+        let ch = chunk_cues(&cues, 5000);
+        let spans: Vec<(usize, usize)> = ch.iter().map(|k| (k.first, k.last)).collect();
+        assert_eq!(spans, vec![(0, 1), (2, 2), (3, 4), (5, 5)]);
+        assert_eq!(chunk_at(&ch, 1500), Some(0));
+        assert_eq!(chunk_at(&ch, 3500), None);
+        assert_eq!(shadow_pause(3000, 1.0), Duration::from_secs_f64(3.5));
+        assert_eq!(shadow_pause(200, 1.0), Duration::from_secs_f64(1.5));
+        assert_eq!(shadow_pause(60_000, 1.0), Duration::from_secs_f64(12.0));
     }
 
     #[test]
