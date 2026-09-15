@@ -162,8 +162,22 @@ focus. It follows mpv's playback position over the IPC socket
 
 On the bar: drag it to move it (the position is remembered in
 `~/.diolingo/.overlay-position`), mouse wheel changes the volume (±5, shown
-briefly), a click pauses or resumes. Everything else goes through
-`diolingo ctl`, which forwards any mpv input command to the player:
+briefly), Ctrl+wheel steps the playback speed, a click pauses or resumes.
+
+Speed for practice: `diolingo play ID --speed 0.75` starts slower (pitch is
+preserved), and while playing
+
+```sh
+diolingo speed         # print the current speed
+diolingo speed down    # previous step: 0.5 0.75 1 1.25 1.5 1.75 2
+diolingo speed up
+diolingo speed 1.25    # any value from 0.1 to 4
+```
+
+The bar shows `speed 0.75x` whenever the speed is not 1. In `--shadow` mode
+the pause after a sentence follows how long the sentence actually took at
+the current speed. Everything else goes through `diolingo ctl`, which forwards
+any mpv input command to the player:
 
 ```sh
 diolingo ctl sub-seek -1      # previous subtitle line

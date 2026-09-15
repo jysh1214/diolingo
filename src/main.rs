@@ -129,10 +129,19 @@ enum Command {
     Ctl(CtlArgs),
     /// List the downloaded videos that `play` can use
     List,
+    /// Change the running player's speed: `speed up`, `speed down`, `speed 1.25`, or no argument to print it
+    Speed(SpeedArgs),
     /// Rebuild the bilingual .srt/.ass from a folder's .en.srt/.zh.srt (after editing the Chinese)
     Subs(SubsArgs),
     /// `subs`, then mux the subtitle tracks into the MKV and render the hard-subbed copy
     Burn(BurnArgs),
+}
+
+#[derive(Args, Debug)]
+struct SpeedArgs {
+    /// up, down, or a value such as 0.75
+    #[arg(allow_hyphen_values = true)]
+    value: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -186,6 +195,10 @@ struct PlayArgs {
     /// Stop at the end instead of looping the file
     #[arg(long = "no-loop", action = clap::ArgAction::SetFalse)]
     r#loop: bool,
+
+    /// Initial playback speed (practice steps: 0.5 0.75 1 1.25 1.5 1.75 2; pitch is preserved)
+    #[arg(long, default_value_t = 1.0)]
+    speed: f64,
 
     /// Shadowing: pause after every sentence long enough to repeat it (click the bar or `ctl cycle pause` to go on early)
     #[arg(long)]
@@ -275,6 +288,7 @@ fn main() -> Result<()> {
             return burn::run(&dir, &burn_opts(&cli, b.soft_only));
         }
         Some(Command::List) => return play::list(&layout.out_base.join(".diolingo")),
+        Some(Command::Speed(a)) => return play::speed(a.value.as_deref()),
         Some(Command::Ctl(c)) => return play::ctl(&c.words),
         Some(Command::Play(p)) => {
             return play::run(&play::PlayOpts {
@@ -291,6 +305,7 @@ fn main() -> Result<()> {
                 mpv_args: &p.mpv_args,
                 volume: p.volume,
                 loop_file: p.r#loop,
+                speed: p.speed.clamp(0.1, 4.0),
                 shadow: p.shadow.then_some(overlay::ShadowOpts {
                     ratio: p.shadow_ratio.max(0.1),
                     chunk_ms: (p.shadow_chunk.max(1.0) * 1000.0) as u64,

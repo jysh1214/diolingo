@@ -4,7 +4,7 @@
 use crate::align::BiCue;
 use crate::captions;
 use crate::mpv;
-use crate::overlay::{self, OverlayOpts, Position, ShadowOpts};
+use crate::overlay::{self, OverlayOpts, Position, ShadowOpts, SPEED_STEPS, speed_step};
 use crate::subs::Order;
 use anyhow::{Context, Result, bail};
 use serde_json::json;
@@ -34,6 +34,8 @@ pub struct PlayOpts<'a> {
     pub volume: Option<u32>,
     /// Restart the file when it ends.
     pub loop_file: bool,
+    /// Initial playback speed.
+    pub speed: f64,
     /// Pause after every sentence for repeating (ratio, max sentence length in ms).
     pub shadow: Option<ShadowOpts>,
     pub dry_run: bool,
@@ -64,6 +66,7 @@ pub fn run(opts: &PlayOpts) -> Result<()> {
     if opts.loop_file {
         cmd.arg("--loop-file=inf");
     }
+    cmd.arg(format!("--speed={}", opts.speed));
     cmd.args(opts.mpv_args).arg(&audio);
     if opts.dry_run {
         println!("{}", shell_words(&cmd));
@@ -187,6 +190,32 @@ fn format_length(ms: u64) -> String {
     let secs = ms.div_ceil(1000);
     let (h, m, s) = (secs / 3600, (secs / 60) % 60, secs % 60);
     if h > 0 { format!("{h}:{m:02}:{s:02}") } else { format!("{m:02}:{s:02}") }
+}
+
+/// `diolingo speed [up|down|<value>]`: step through the practice speeds or set
+/// one; with no argument, print the current speed.
+pub fn speed(arg: Option<&str>) -> Result<()> {
+    let mut client = mpv::Client::connect(&mpv::socket_path())?;
+    let current = client.command(vec![json!("get_property"), json!("speed")])?.as_f64().unwrap_or(1.0);
+    let target = match arg {
+        None => {
+            println!("{current}");
+            return Ok(());
+        }
+        Some("up") | Some("+") => speed_step(current, true),
+        Some("down") | Some("-") => speed_step(current, false),
+        Some(v) => {
+            let v: f64 = v.parse().with_context(|| format!("speed must be up, down or a number, got {v:?}"))?;
+            if !(0.1..=4.0).contains(&v) {
+                bail!("speed {v} is out of range (0.1 to 4)");
+            }
+            v
+        }
+    };
+    client.command(vec![json!("set_property"), json!("speed"), json!(target)])?;
+    let steps = SPEED_STEPS.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" ");
+    println!("{target}  (steps: {steps})");
+    Ok(())
 }
 
 /// `diolingo ctl <mpv command...>`: forward one command to the running player.

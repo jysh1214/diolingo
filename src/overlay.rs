@@ -89,10 +89,23 @@ fn chunk_at(chunks: &[Chunk], t_ms: u64) -> Option<usize> {
     (t_ms < chunks[i].end_ms).then_some(i)
 }
 
-/// How long to pause after a sentence of `len_ms`.
-fn shadow_pause(len_ms: u64, ratio: f64) -> Duration {
-    let secs = (len_ms as f64 / 1000.0 * ratio + 0.5).clamp(1.5, 12.0);
-    Duration::from_secs_f64(secs)
+/// How long to pause after a sentence of `len_ms` played at `speed`.
+fn shadow_pause(len_ms: u64, ratio: f64, speed: f64) -> Duration {
+    let heard = len_ms as f64 / 1000.0 / speed.max(0.1);
+    Duration::from_secs_f64((heard * ratio + 0.5).clamp(1.5, 12.0))
+}
+
+/// Playback speeds offered for practice, slowest to fastest.
+pub const SPEED_STEPS: [f64; 7] = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
+
+/// The next step above (`up`) or below the current speed, clamped to the ends.
+pub fn speed_step(current: f64, up: bool) -> f64 {
+    const EPS: f64 = 1e-3;
+    if up {
+        SPEED_STEPS.iter().copied().find(|&v| v > current + EPS).unwrap_or(*SPEED_STEPS.last().unwrap())
+    } else {
+        SPEED_STEPS.iter().rev().copied().find(|&v| v < current - EPS).unwrap_or(SPEED_STEPS[0])
+    }
 }
 
 fn set_pause(control: &Arc<Mutex<UnixStream>>, paused: bool) {
@@ -144,6 +157,8 @@ struct Shared {
     volume: Option<f64>,
     /// Show the volume readout until this instant (set on volume changes).
     volume_until: Option<Instant>,
+    speed: Option<f64>,
+    speed_until: Option<Instant>,
     /// False once mpv closed the socket.
     alive: bool,
 }
@@ -151,7 +166,7 @@ struct Shared {
 pub fn run(cues: Vec<BiCue>, opts: OverlayOpts, socket: &Path) -> Result<()> {
     let stream = UnixStream::connect(socket).with_context(|| format!("connecting to {}", socket.display()))?;
     let mut control = stream.try_clone()?;
-    for (id, prop) in [(1, "time-pos"), (2, "pause"), (3, "volume")] {
+    for (id, prop) in [(1, "time-pos"), (2, "pause"), (3, "volume"), (4, "speed")] {
         mpv::send(&mut control, &json!({ "command": ["observe_property", id, prop] }))?;
     }
     let shared = Arc::new(Mutex::new(Shared { alive: true, ..Default::default() }));
@@ -186,6 +201,13 @@ fn spawn_reader(stream: UnixStream, shared: Arc<Mutex<Shared>>) {
                         s.volume_until = Some(Instant::now() + Duration::from_millis(1500));
                     }
                     s.volume = v;
+                }
+                Some("speed") => {
+                    let v = msg.get("data").and_then(Value::as_f64);
+                    if s.speed.is_some() && v != s.speed {
+                        s.speed_until = Some(Instant::now() + Duration::from_millis(1500));
+                    }
+                    s.speed = v;
                 }
                 _ => {}
             }
@@ -362,13 +384,20 @@ fn build_ui(app: &gtk::Application, cues: Rc<Vec<BiCue>>, opts: Rc<OverlayOpts>,
     }
     window.add_controller(drag);
 
-    // Wheel: volume. Click (without dragging): pause/resume.
+    // Wheel: volume; Ctrl+wheel: speed step. Click (without dragging): pause/resume.
     let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
     let ctl = control.clone();
-    scroll.connect_scroll(move |_, _dx, dy| {
-        let step = if dy < 0.0 { 5 } else { -5 };
+    let shared_ref = shared.clone();
+    scroll.connect_scroll(move |controller, _dx, dy| {
+        let up = dy < 0.0;
+        let command = if controller.current_event_state().contains(gtk::gdk::ModifierType::CONTROL_MASK) {
+            let current = shared_ref.lock().ok().and_then(|s| s.speed).unwrap_or(1.0);
+            json!({ "command": ["set_property", "speed", speed_step(current, up)] })
+        } else {
+            json!({ "command": ["add", "volume", if up { 5 } else { -5 }] })
+        };
         if let Ok(mut s) = ctl.lock() {
-            let _ = mpv::send(&mut s, &json!({ "command": ["add", "volume", step] }));
+            let _ = mpv::send(&mut s, &command);
         }
         glib::Propagation::Stop
     });
@@ -399,9 +428,18 @@ fn build_ui(app: &gtk::Application, cues: Rc<Vec<BiCue>>, opts: Rc<OverlayOpts>,
     let mut shadowed: Option<usize> = None;
     let mut pausing: Option<(usize, Instant, bool)> = None;
     glib::timeout_add_local(Duration::from_millis(40), move || {
-        let (time_ms, paused, volume, show_volume, alive) = {
+        let (time_ms, paused, volume, show_volume, speed, show_speed, alive) = {
             let s = shared.lock().unwrap();
-            (s.time_ms, s.paused, s.volume, s.volume_until.is_some_and(|t| Instant::now() < t), s.alive)
+            let now = Instant::now();
+            (
+                s.time_ms,
+                s.paused,
+                s.volume,
+                s.volume_until.is_some_and(|t| now < t),
+                s.speed.unwrap_or(1.0),
+                s.speed_until.is_some_and(|t| now < t),
+                s.alive,
+            )
         };
         if !alive {
             app_ref.quit();
@@ -444,7 +482,7 @@ fn build_ui(app: &gtk::Application, cues: Rc<Vec<BiCue>>, opts: Rc<OverlayOpts>,
                 {
                     set_pause(&control_ref, true);
                     let c = &chunks[k];
-                    pausing = Some((k, Instant::now() + shadow_pause(c.end_ms - c.start_ms, o.ratio), false));
+                    pausing = Some((k, Instant::now() + shadow_pause(c.end_ms - c.start_ms, o.ratio, speed), false));
                 }
                 if cur.is_some() {
                     seen_chunk = cur;
@@ -456,10 +494,14 @@ fn build_ui(app: &gtk::Application, cues: Rc<Vec<BiCue>>, opts: Rc<OverlayOpts>,
         let (en_text, zh_text, status_text) = match shadow_text {
             Some(t) => t,
             None => {
-                let status_text = match (paused, show_volume, volume) {
-                    (true, _, _) => "⏸ paused".to_string(),
-                    (false, true, Some(v)) => format!("volume {:.0}%", v),
-                    _ => String::new(),
+                let status_text = if paused {
+                    "⏸ paused".to_string()
+                } else if show_volume && volume.is_some() {
+                    format!("volume {:.0}%", volume.unwrap_or(0.0))
+                } else if show_speed || (speed - 1.0).abs() > 1e-3 {
+                    format!("speed {}x", trim_speed(speed))
+                } else {
+                    String::new()
                 };
                 match idx {
                     Some(i) => (cues[i].en.clone(), cues[i].zh.clone(), status_text),
@@ -486,6 +528,12 @@ fn build_ui(app: &gtk::Application, cues: Rc<Vec<BiCue>>, opts: Rc<OverlayOpts>,
     // Ctrl-C in the terminal reaches mpv as well (same process group); its exit
     // closes the socket, which ends the loop above.
     window.present();
+}
+
+/// `1.25` -> "1.25", `1.5` -> "1.5", `1.0` -> "1".
+fn trim_speed(v: f64) -> String {
+    let s = format!("{v:.2}");
+    s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
 /// Index of the cue covering `t_ms`, if any (cues are sorted, non-overlapping).
@@ -538,9 +586,23 @@ mod tests {
         assert_eq!(spans, vec![(0, 1), (2, 2), (3, 4), (5, 5)]);
         assert_eq!(chunk_at(&ch, 1500), Some(0));
         assert_eq!(chunk_at(&ch, 3500), None);
-        assert_eq!(shadow_pause(3000, 1.0), Duration::from_secs_f64(3.5));
-        assert_eq!(shadow_pause(200, 1.0), Duration::from_secs_f64(1.5));
-        assert_eq!(shadow_pause(60_000, 1.0), Duration::from_secs_f64(12.0));
+        assert_eq!(shadow_pause(3000, 1.0, 1.0), Duration::from_secs_f64(3.5));
+        assert_eq!(shadow_pause(3000, 1.0, 0.5), Duration::from_secs_f64(6.5));
+        assert_eq!(shadow_pause(200, 1.0, 1.0), Duration::from_secs_f64(1.5));
+        assert_eq!(shadow_pause(60_000, 1.0, 1.0), Duration::from_secs_f64(12.0));
+    }
+
+    #[test]
+    fn speed_steps_clamp_and_step() {
+        assert_eq!(speed_step(1.0, true), 1.25);
+        assert_eq!(speed_step(1.0, false), 0.75);
+        assert_eq!(speed_step(2.0, true), 2.0);
+        assert_eq!(speed_step(0.5, false), 0.5);
+        assert_eq!(speed_step(1.1, true), 1.25);
+        assert_eq!(speed_step(1.1, false), 1.0);
+        assert_eq!(trim_speed(1.0), "1");
+        assert_eq!(trim_speed(1.25), "1.25");
+        assert_eq!(trim_speed(1.5), "1.5");
     }
 
     #[test]
