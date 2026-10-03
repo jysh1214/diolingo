@@ -88,12 +88,13 @@ struct Cli {
     #[arg(long)]
     no_video: bool,
 
-    /// Skip the Qwen translation: fetch the English track (and video/audio) only, leaving no .zh.srt
-    /// (an existing one is kept), e.g. to have the Chinese written some other way
+    /// Skip the Qwen translation and with it the bilingual .srt/.ass: fetch the English track (and
+    /// video/audio) only, leaving no .zh.srt (an existing one is kept), e.g. to have the Chinese
+    /// written some other way
     #[arg(long, conflicts_with = "burn")]
     no_translate: bool,
 
-    /// Also run `burn` right away: bilingual .srt/.ass, subtitle tracks in the MKV, hard-subbed copy
+    /// Also run `burn` right away: subtitle tracks in the MKV, hard-subbed copy
     #[arg(long)]
     burn: bool,
 
@@ -439,8 +440,8 @@ fn process_video(cli: &Cli, layout: &Layout, yt: &YtDlp, agent: &ureq::Agent, tr
     }
     log(format!("english: {} cues", en_cues.len()));
 
-    // Sidecars: the English track and the Qwen draft. Everything else
-    // (bilingual .srt/.ass, subtitle tracks, hard-sub) is `burn`'s job, so the
+    // Sidecars: the English track, the Qwen draft and the bilingual .srt/.ass
+    // built from them. Subtitle tracks and the hard-sub are `burn`'s job, so the
     // Chinese can be revised first.
     let stem = format!("{} [{}]", sanitize(&title), id);
     let out = |suffix: &str| video_dir.join(format!("{stem}.{suffix}"));
@@ -457,6 +458,10 @@ fn process_video(cli: &Cli, layout: &Layout, yt: &YtDlp, agent: &ureq::Agent, tr
         log(format!("bilingual: {} cues, {with_zh} with Chinese", bi.len()));
         subs::write_zh_srt(&out("zh.srt"), &bi)?;
         log(format!("subtitles: {}", out("zh.srt").display()));
+        // The bilingual .srt/.ass (`subs`); `burn` below writes them itself.
+        if !cli.burn || cli.no_video {
+            burn::write_bilingual(&video_dir, &burn_opts(cli, true))?;
+        }
     } else {
         log("translation skipped (--no-translate)");
     }

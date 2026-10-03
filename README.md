@@ -16,20 +16,20 @@ fetches the material into `~/.diolingo/[<video id>] <title>/`:
 | `<Title> [id].m4a` | audio only, for listening practice (`--no-audio` skips it) |
 | `<Title> [id].en.srt` | the English track |
 | `<Title> [id].zh.srt` | the Chinese draft from the local Qwen model |
+| `<Title> [id].srt` | bilingual SRT (English line, then Chinese line) |
+| `<Title> [id].ass` | bilingual ASS with separate `EN` / `ZH` styles (white / pale yellow) |
 | `.work/` | info JSON, raw captions, the downloaded video, cached translations |
 
-That is enough for `diolingo play` (it reads the two `.srt` sidecars). Revise
-`.zh.srt` if you like, then build the finished files:
+That is enough for `diolingo play` (it reads the two single-language `.srt`
+sidecars). Revise `.zh.srt` if you like, then rebuild or finish the files:
 
 ```sh
-diolingo subs ID   # only the bilingual .srt and .ass
+diolingo subs ID   # rebuild only the bilingual .srt and .ass
 diolingo burn ID   # those, plus the MKV subtitle tracks and the hard-subbed copy
 ```
 
 | File | Content |
 |------|---------|
-| `<Title> [id].srt` | bilingual SRT (English line, then Chinese line) |
-| `<Title> [id].ass` | bilingual ASS with separate `EN` / `ZH` styles (white / pale yellow) |
 | `<Title> [id].mkv` | now with 4 subtitle tracks: styled EN+ZH (default), plain EN+ZH, EN only, ZH only |
 | `<Title> [id].hardsub.mkv` | the video with the styled EN+ZH subtitles burned into the picture (`--soft-only` skips this slow re-encode) |
 
@@ -38,8 +38,9 @@ them again after every edit of `.zh.srt`; `burn` always starts from the clean
 download in `.work/`. `diolingo --burn URL` does everything in one go.
 
 `--no-translate` skips the Qwen step (no GPU, no model download): you get the
-`.en.srt`, video and audio but no `.zh.srt` (an existing one is left alone), so
-the Chinese can be written some other way before `play`/`subs`/`burn`.
+`.en.srt`, video and audio but no `.zh.srt` (an existing one is left alone) and
+no bilingual `.srt`/`.ass`, so the Chinese can be written some other way before
+`play`/`subs`/`burn`.
 
 `--out DIR` moves the whole tree to `DIR/.diolingo/[<video id>] <title>/`. A
 re-run finds the folder by its `[<video id>]` prefix (so a renamed video still
