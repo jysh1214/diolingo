@@ -37,6 +37,10 @@ diolingo burn ID   # those, plus the MKV subtitle tracks and the hard-subbed cop
 them again after every edit of `.zh.srt`; `burn` always starts from the clean
 download in `.work/`. `diolingo --burn URL` does everything in one go.
 
+`--no-translate` skips the Qwen step (no GPU, no model download): you get the
+`.en.srt`, video and audio but no `.zh.srt` (an existing one is left alone), so
+the Chinese can be written some other way before `play`/`subs`/`burn`.
+
 `--out DIR` moves the whole tree to `DIR/.diolingo/[<video id>] <title>/`. A
 re-run finds the folder by its `[<video id>]` prefix (so a renamed video still
 lands in the same place) and reuses everything in `.work/`; pass `--clean` to

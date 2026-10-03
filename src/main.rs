@@ -88,6 +88,11 @@ struct Cli {
     #[arg(long)]
     no_video: bool,
 
+    /// Skip the Qwen translation: fetch the English track (and video/audio) only, leaving no .zh.srt
+    /// (an existing one is kept), e.g. to have the Chinese written some other way
+    #[arg(long, conflicts_with = "burn")]
+    no_translate: bool,
+
     /// Also run `burn` right away: bilingual .srt/.ass, subtitle tracks in the MKV, hard-subbed copy
     #[arg(long)]
     burn: bool,
@@ -331,24 +336,30 @@ fn main() -> Result<()> {
     }
     log(format!("yt-dlp {version}"));
 
-    let script = match &cli.script {
-        Some(s) => std::path::absolute(s).context("resolving --script")?,
-        None => qwen::install_script(&home.join(".diolingo").join(".scripts"))?,
-    };
-    let glossary = qwen::install_glossary(&home.join(".diolingo"), &home.join(".diolingo").join(".scripts"))?;
+    let translator = if cli.no_translate {
+        log("translator: none (--no-translate)");
+        None
+    } else {
+        let script = match &cli.script {
+            Some(s) => std::path::absolute(s).context("resolving --script")?,
+            None => qwen::install_script(&home.join(".diolingo").join(".scripts"))?,
+        };
+        let glossary = qwen::install_glossary(&home.join(".diolingo"), &home.join(".diolingo").join(".scripts"))?;
 
-    let translator = Qwen {
-        script,
-        glossary: glossary.is_file().then_some(glossary),
-        python: cli.python.clone(),
-        model: cli.model.clone(),
-        batch_lines: cli.batch,
-        extra_args: cli.qwen_args.clone(),
+        let translator = Qwen {
+            script,
+            glossary: glossary.is_file().then_some(glossary),
+            python: cli.python.clone(),
+            model: cli.model.clone(),
+            batch_lines: cli.batch,
+            extra_args: cli.qwen_args.clone(),
+        };
+        if !cli.list_subs {
+            translator.check()?;
+        }
+        log(format!("translator: {}", translator.describe()));
+        Some(translator)
     };
-    if !cli.list_subs {
-        translator.check()?;
-    }
-    log(format!("translator: {}", translator.describe()));
 
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(120)))
@@ -363,7 +374,7 @@ fn main() -> Result<()> {
     // so the remaining URLs still get processed.
     let run = |url: &str, info: Info, raw: &str| -> bool {
         let label = format!("{} [{}]", info.title, info.id);
-        match process_video(&cli, &layout, &yt, &agent, &translator, url, &info, raw) {
+        match process_video(&cli, &layout, &yt, &agent, translator.as_ref(), url, &info, raw) {
             Ok(()) => false,
             Err(e) => {
                 eprintln!("[diolingo] ERROR {label}: {e:#}");
@@ -398,7 +409,7 @@ fn main() -> Result<()> {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn process_video(cli: &Cli, layout: &Layout, yt: &YtDlp, agent: &ureq::Agent, translator: &Qwen, url: &str, info: &Info, raw: &str) -> Result<()> {
+fn process_video(cli: &Cli, layout: &Layout, yt: &YtDlp, agent: &ureq::Agent, translator: Option<&Qwen>, url: &str, info: &Info, raw: &str) -> Result<()> {
     let id = info.id.as_str();
     let title = if info.title.is_empty() { id.to_string() } else { info.title.clone() };
     log(format!("== {title} [{id}]"));
@@ -428,22 +439,27 @@ fn process_video(cli: &Cli, layout: &Layout, yt: &YtDlp, agent: &ureq::Agent, tr
     }
     log(format!("english: {} cues", en_cues.len()));
 
-    // Chinese: translate the English cues 1:1 with the local Qwen model.
-    let texts: Vec<String> = en_cues.iter().map(|c| c.text.clone()).collect();
-    log(format!("translating {} lines to {} with local Qwen", texts.len(), cli.zh.tag()));
-    let zh = translator.translate(&work, id, &texts, &title, cli.zh.llm_name())?;
-    let bi = align::zip(&en_cues, &zh);
-    let with_zh = bi.iter().filter(|c| !c.zh.is_empty()).count();
-    log(format!("bilingual: {} cues, {with_zh} with Chinese", bi.len()));
-
     // Sidecars: the English track and the Qwen draft. Everything else
     // (bilingual .srt/.ass, subtitle tracks, hard-sub) is `burn`'s job, so the
     // Chinese can be revised first.
     let stem = format!("{} [{}]", sanitize(&title), id);
     let out = |suffix: &str| video_dir.join(format!("{stem}.{suffix}"));
     subs::write_srt(&out("en.srt"), &en_cues)?;
-    subs::write_zh_srt(&out("zh.srt"), &bi)?;
-    log(format!("subtitles: {}", out("zh.srt").display()));
+    log(format!("subtitles: {}", out("en.srt").display()));
+
+    // Chinese: translate the English cues 1:1 with the local Qwen model.
+    if let Some(translator) = translator {
+        let texts: Vec<String> = en_cues.iter().map(|c| c.text.clone()).collect();
+        log(format!("translating {} lines to {} with local Qwen", texts.len(), cli.zh.tag()));
+        let zh = translator.translate(&work, id, &texts, &title, cli.zh.llm_name())?;
+        let bi = align::zip(&en_cues, &zh);
+        let with_zh = bi.iter().filter(|c| !c.zh.is_empty()).count();
+        log(format!("bilingual: {} cues, {with_zh} with Chinese", bi.len()));
+        subs::write_zh_srt(&out("zh.srt"), &bi)?;
+        log(format!("subtitles: {}", out("zh.srt").display()));
+    } else {
+        log("translation skipped (--no-translate)");
+    }
 
     if !cli.no_video {
         let video = yt.download_video(url, &info_path, &work, id, cli.max_height)?;
